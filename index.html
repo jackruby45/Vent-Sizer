@@ -117,6 +117,7 @@
                   </span>
                 </label>
                 <select id="calculation-goal" name="calculation-goal" required>
+                  <option value="design-new-d1">Design for New Class 1 Div 1 Area</option>
                   <option value="reclassify-d1-to-d2">Reclassify from Class 1 Div 1 to Div 2</option>
                   <option value="design-new-d2" selected>Design for New Class 1 Div 2 Area</option>
                   <option value="reclassify-d2-to-non-classified">Reclassify Class 1 Div 2 to Non-Classified Area</option>
@@ -572,8 +573,16 @@
       </div>
 
       <div id="diagram-content" class="hidden">
-        <div class="info-note" style="text-align: left; padding: 1rem; margin-bottom: 1rem;">
-          Drag equipment from the palette on the left onto the building floor plan. The diagram uses a top-down view. Distances are to scale.
+        <div class="diagram-instructions">
+            <h4>How to Use the Diagram Tool</h4>
+            <ol>
+                <li>The building floor plan is automatically scaled based on the dimensions from the calculator.</li>
+                <li>Drag equipment from the <strong>Palette</strong> on the left and drop it onto the floor plan.</li>
+                <li>Hazardous area zones (Div 1 & 2) will be drawn to scale around each piece of equipment.</li>
+                <li>Use your mouse wheel to <strong>Zoom</strong> and click-and-drag to <strong>Pan</strong> the view.</li>
+                <li>Use the controls on the right to manage the view and the placed equipment.</li>
+                <li>The final diagram can be included in the generated PDF report.</li>
+            </ol>
         </div>
         <div class="diagram-layout">
             <div id="diagram-palette" class="diagram-palette">
@@ -583,9 +592,30 @@
             <div class="canvas-wrapper">
                 <svg id="diagram-canvas"></svg>
             </div>
-        </div>
-        <div class="diagram-actions">
-            <button id="clear-diagram-btn" class="secondary-btn">Clear Diagram</button>
+            <div id="diagram-controls" class="diagram-controls">
+                <h4>Controls & Info</h4>
+                <div class="control-group">
+                    <label>View Controls</label>
+                    <div class="button-group">
+                        <button id="zoom-in-btn" title="Zoom In">+</button>
+                        <button id="zoom-out-btn" title="Zoom Out">-</button>
+                        <button id="reset-view-btn" title="Reset View">Reset</button>
+                    </div>
+                </div>
+                 <div class="control-group">
+                    <label>Legend</label>
+                    <div id="diagram-legend">
+                        <!-- Legend populated by JS -->
+                    </div>
+                </div>
+                <div class="control-group">
+                    <label>Placed Equipment</label>
+                    <ul id="equipment-list">
+                       <!-- List populated by JS -->
+                    </ul>
+                    <button id="clear-diagram-btn" class="secondary-btn">Clear All Equipment</button>
+                </div>
+            </div>
         </div>
       </div>
 
@@ -614,10 +644,11 @@
       <div id="report-content" class="hidden">
         <section class="content-panel">
            <h2>Report Generation</h2>
-           <p>You can download a PDF report or copy the LaTeX code for use in an external editor like Overleaf.</p>
+           <p>You can download a professional PDF report or copy the LaTeX code for use in an external editor like Overleaf.</p>
            <div class="report-actions">
-                <button id="download-pdf-btn">Download PDF</button>
+                <button id="download-pdf-btn">Download PDF Report</button>
                 <button id="copy-latex-btn">Copy LaTeX Code</button>
+                <a href="https://www.overleaf.com/" target="_blank" rel="noopener noreferrer" class="overleaf-link">Paste Code into Overleaf</a>
            </div>
            <pre><code id="latex-code-output">No report has been generated yet.</code></pre>
        </section>

@@ -2,8 +2,6 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import { jsPDF } from "jspdf";
-import autoTable from 'jspdf-autotable';
 
 // --- State Management ---
 let lastCalculationData: { formData: any, results: any, recommendations: string[] } | null = null;
@@ -71,13 +69,16 @@ const loginErrorMessage = document.getElementById('login-error-message') as HTML
 // Report View
 const latexCodeOutput = document.getElementById("latex-code-output") as HTMLElement;
 const copyLatexBtn = document.getElementById("copy-latex-btn") as HTMLButtonElement;
-const downloadPdfBtn = document.getElementById("download-pdf-btn") as HTMLButtonElement;
 
 // Diagram View
 const diagramPalette = document.getElementById("diagram-palette") as HTMLDivElement;
-// FIX: Correctly cast to SVGSVGElement to resolve typing errors and allow access to SVG-specific methods. This also resolves the error on line 1629.
 const diagramCanvas = document.getElementById("diagram-canvas") as unknown as SVGSVGElement;
 const clearDiagramBtn = document.getElementById("clear-diagram-btn") as HTMLButtonElement;
+const zoomInBtn = document.getElementById('zoom-in-btn') as HTMLButtonElement;
+const zoomOutBtn = document.getElementById('zoom-out-btn') as HTMLButtonElement;
+const resetViewBtn = document.getElementById('reset-view-btn') as HTMLButtonElement;
+const equipmentList = document.getElementById('equipment-list') as HTMLUListElement;
+const diagramLegend = document.getElementById('diagram-legend') as HTMLDivElement;
 
 
 // --- Diagram State & Config ---
@@ -107,6 +108,18 @@ const EQUIPMENT_ZONES: { [key: string]: { label: string; zones: { type: 'Divisio
         zones: [
             { type: 'Division 2', shape: 'circle', radius: 15 },
         ]
+    },
+    'generic-div1': {
+        label: 'Generic Class I, Div 1 Source',
+        zones: [
+            { type: 'Division 1', shape: 'circle', radius: 5 },
+        ]
+    },
+    'generic-div2': {
+        label: 'Generic Class I, Div 2 Source',
+        zones: [
+            { type: 'Division 2', shape: 'circle', radius: 15 },
+        ]
     }
 };
 
@@ -131,14 +144,18 @@ const FUGITIVE_EMISSION_FACTOR_SETS: { [key: string]: { name: string; factors: {
 
 
 let diagramState: {
-    equipment: { type: string; x: number; y: number }[];
+    equipment: { type: string; x: number; y: number; id: number }[];
     building: { width: number; length: number };
-    scale: number;
+    pixelsPerFoot: number;
+    transform: { scale: number; translateX: number; translateY: number; };
 } = {
     equipment: [],
     building: { width: 0, length: 0 },
-    scale: 1, // pixels per foot
+    pixelsPerFoot: 1, // pixels per foot at scale 1
+    transform: { scale: 1, translateX: 0, translateY: 0 },
 };
+let nextEquipmentId = 0; // For unique IDs
+
 
 // --- Utility Functions ---
 
@@ -192,6 +209,70 @@ function escapeLatex(str: string): string {
         .replace(/\^/g, '\\textasciicircum{}');
 }
 
+// --- Fugitive Emission UI ---
+// Fix: Implement `populateFugitiveSourceTypes` to fill the source type dropdown.
+function populateFugitiveSourceTypes(): void {
+    const factorSetKey = fugitiveFactorSetSelect.value;
+    const factors = FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey]?.factors;
+    fugitiveSourceTypeSelect.innerHTML = ''; // Clear existing options
+
+    if (factors) {
+        Object.entries(factors).forEach(([key, value]) => {
+            const option = document.createElement('option');
+            option.value = key;
+            option.textContent = value.label;
+            fugitiveSourceTypeSelect.appendChild(option);
+        });
+    }
+}
+
+// Fix: Implement `updateTotalLeakRate` helper.
+function updateTotalLeakRate(): void {
+    const factorSetKey = fugitiveFactorSetSelect.value;
+    const factors = FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey]?.factors;
+    if (!factors) {
+        totalLeakRateValue.textContent = '0.0000';
+        return;
+    }
+    const totalRate = fugitiveSources.reduce((total, src) => {
+        const rate = factors[src.type]?.rateCFM || 0;
+        return total + (rate * src.quantity);
+    }, 0);
+    totalLeakRateValue.textContent = totalRate.toFixed(4);
+}
+
+// Fix: Implement `renderFugitiveSourcesList` to display and manage the list of fugitive sources.
+function renderFugitiveSourcesList(): void {
+    fugitiveSourcesList.innerHTML = '';
+    const factorSetKey = fugitiveFactorSetSelect.value;
+    const factors = FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey]?.factors;
+
+    if (fugitiveSources.length === 0) {
+        fugitiveSourcesList.innerHTML = '<p>No fugitive sources added yet.</p>';
+    } else {
+        fugitiveSources.forEach((source, index) => {
+            const factorInfo = factors ? factors[source.type] : null;
+            const label = factorInfo ? factorInfo.label : `Unknown Type: ${source.type}`;
+            
+            const item = document.createElement('div');
+            item.className = 'fugitive-source-item';
+            item.innerHTML = `
+                <span>${label}: ${source.quantity}</span>
+                <button type="button" class="remove-btn" data-index="${index}" title="Remove source">&times;</button>
+            `;
+            item.querySelector('.remove-btn')?.addEventListener('click', () => {
+                fugitiveSources.splice(index, 1);
+                renderFugitiveSourcesList();
+            });
+            fugitiveSourcesList.appendChild(item);
+        });
+    }
+    updateTotalLeakRate();
+}
+
+// Initial population of fugitive source types
+populateFugitiveSourceTypes();
+
 // --- Event Listeners ---
 
 function handleTabClick(tab: HTMLButtonElement, content: HTMLDivElement): void {
@@ -207,8 +288,7 @@ theoryTab.addEventListener("click", () => handleTabClick(theoryTab, theoryConten
 resultsSummaryTab.addEventListener("click", () => handleTabClick(resultsSummaryTab, resultsSummaryContent));
 diagramTab.addEventListener("click", () => {
     handleTabClick(diagramTab, diagramContent);
-    // FIX: Initialize the diagram only the first time the tab is clicked after a calculation.
-    // This ensures the container is visible and has dimensions before setup is called.
+    // Initialize the diagram only the first time the tab is clicked after a calculation.
     if (lastCalculationData && !isDiagramInitialized) {
         // Use a short timeout to allow the browser to render the now-visible container.
         setTimeout(() => {
@@ -307,12 +387,6 @@ copyLatexBtn.addEventListener("click", async () => {
     }
 });
 
-downloadPdfBtn.addEventListener("click", () => {
-    if (lastCalculationData) {
-        generatePdfReport(lastCalculationData.formData, lastCalculationData.results, lastCalculationData.recommendations);
-    }
-});
-
 addFugitiveSourceBtn.addEventListener('click', () => {
     const type = fugitiveSourceTypeSelect.value;
     const quantity = parseInt(fugitiveSourceQtyInput.value, 10);
@@ -324,9 +398,16 @@ addFugitiveSourceBtn.addEventListener('click', () => {
         } else {
             fugitiveSources.push({ type, quantity });
         }
+        // Fix: Call the implemented `renderFugitiveSourcesList` function.
         renderFugitiveSourcesList();
         fugitiveSourceQtyInput.value = '1'; 
     }
+});
+
+// Fix: Add event listener for factor set changes.
+fugitiveFactorSetSelect.addEventListener('change', () => {
+    populateFugitiveSourceTypes();
+    updateTotalLeakRate();
 });
 
 const handleModeChange = () => {
@@ -354,6 +435,7 @@ async function runCalculation(loadedData: any | null = null) {
     // If loading, restore fugitive sources
     if (loadedData && loadedData.fugitiveSources) {
         fugitiveSources = loadedData.fugitiveSources;
+        // Fix: Call the implemented `renderFugitiveSourcesList` function.
         renderFugitiveSourcesList();
     }
 
@@ -796,9 +878,9 @@ function generateIsometricViewSvg(results: any): string {
         <polygon points="${p4.x},${p4.y} ${p5.x},${p5.y} ${p7.x},${p7.y} ${p6.x},${p6.y}" fill="#e0e0e0" fill-opacity="0.8" stroke="#e0e0e0" stroke-width="0.75"/>
         <path class="flow-arrow" d="${inletArrowPath}" marker-end="url(#arrowhead)" />
         <path class="flow-arrow" d="${outletArrowPath}" marker-end="url(#arrowhead)" />
-        <text x="${lengthLabelX}" y="${lengthLabelY - 4}" transform="rotate(${-angleDeg} ${lengthLabelX} ${lengthLabelY})" text-anchor="middle" font-size="8" fill="#e0e0e0">Length: ${l_orig.toFixed(1)} ft</text>
-        <text x="${widthLabelX}" y="${widthLabelY - 4}" transform="rotate(${angleDeg} ${widthLabelX} ${widthLabelY})" text-anchor="middle" font-size="8" fill="#e0e0e0">Width: ${w_orig.toFixed(1)} ft</text>
-        <text x="${heightLabelX}" y="${heightLabelY}" transform="rotate(-90 ${heightLabelX} ${heightLabelY})" text-anchor="middle" font-size="8" fill="#e0e0e0">Height: ${h_orig.toFixed(1)} ft</text>
+        <text x="${lengthLabelX}" y="${lengthLabelY - 4}" transform="rotate(${-angleDeg} ${lengthLabelX} ${lengthLabelY})" text-anchor="middle" font-size="8" fill="#e0e0e0">Length: ${l_orig.toFixed(2)} ft</text>
+        <text x="${widthLabelX}" y="${widthLabelY - 4}" transform="rotate(${angleDeg} ${widthLabelX} ${widthLabelY})" text-anchor="middle" font-size="8" fill="#e0e0e0">Width: ${w_orig.toFixed(2)} ft</text>
+        <text x="${heightLabelX}" y="${heightLabelY}" transform="rotate(-90 ${heightLabelX} ${heightLabelY})" text-anchor="middle" font-size="8" fill="#e0e0e0">Height: ${h_orig.toFixed(2)} ft</text>
       </svg>
     `;
 }
@@ -844,9 +926,9 @@ function renderDetailedSteps(results: any) {
         <p class="formula">Constants Used in Calculation</p>
         <table class="data-table">
             <tr><td>Atmospheric Pressure (P_atm)</td><td>${results.P_ATM.toFixed(2)} psf</td></tr>
-            <tr><td>Gas Constant for Air (R_air)</td><td>${results.R_AIR.toFixed(3)} ft·lbf/(lb·°R)</td></tr>
-            <tr><td>Gravitational Acceleration (g)</td><td>${results.G.toFixed(1)} ft/s²</td></tr>
-            <tr><td>Wind Units Conversion (C4)</td><td>${results.C4_WIND_UNITS.toFixed(1)}</td></tr>
+            <tr><td>Gas Constant for Air (R_air)</td><td>${results.R_AIR.toFixed(2)} ft·lbf/(lb·°R)</td></tr>
+            <tr><td>Gravitational Acceleration (g)</td><td>${results.G.toFixed(2)} ft/s²</td></tr>
+            <tr><td>Wind Units Conversion (C4)</td><td>${results.C4_WIND_UNITS.toFixed(2)}</td></tr>
         </table>
       </div>
     `;
@@ -875,7 +957,7 @@ function renderDetailedSteps(results: any) {
             <tr>
                 <td>${factors[src.type].label}</td>
                 <td>${src.quantity}</td>
-                <td>${(factors[src.type].rateCFM * src.quantity).toFixed(4)}</td>
+                <td>${(factors[src.type].rateCFM * src.quantity).toFixed(2)}</td>
             </tr>
         `).join('');
 
@@ -890,7 +972,7 @@ function renderDetailedSteps(results: any) {
                     <tfoot>
                         <tr>
                             <td colspan="2"><strong>Total Calculated Leak Rate (Q_leak)</strong></td>
-                            <td><strong>${results.leakRate.toFixed(4)}</strong></td>
+                            <td><strong>${results.leakRate.toFixed(2)}</strong></td>
                         </tr>
                     </tfoot>
                 </table>
@@ -901,11 +983,11 @@ function renderDetailedSteps(results: any) {
                  <p class="formula">2. Required Ventilation Rate (Qv)</p>
                  <p class="sub-calculation">Qv = Q_leak / (C × (LFL/100))</p>
                  <ul>
-                    <li>Q_leak (Total Leak Rate) = ${results.leakRate.toFixed(4)} ${results.units.flow}</li>
+                    <li>Q_leak (Total Leak Rate) = ${results.leakRate.toFixed(2)} ${results.units.flow}</li>
                     <li>C (Safety Factor) = ${results.safetyFactor}</li>
                     <li>LFL (Lower Flammable Limit) = ${results.lfl}%</li>
                  </ul>
-                 <p class="calculation">Qv = ${results.leakRate.toFixed(4)} / (${results.safetyFactor} × (${results.lfl} / 100)) = <strong>${results.requiredVentilationRate.toFixed(2)} ${results.units.flow}</strong></p>
+                 <p class="calculation">Qv = ${results.leakRate.toFixed(2)} / (${results.safetyFactor} × (${results.lfl} / 100)) = <strong>${results.requiredVentilationRate.toFixed(2)} ${results.units.flow}</strong></p>
             </div>
         `;
     }
@@ -924,7 +1006,7 @@ function renderDetailedSteps(results: any) {
             <p class="formula">1. Wind Effect (F_w)</p>
             <p class="sub-calculation">Effective Wind Velocity (V_eff) = Avg. Wind Velocity × Terrain Factor = ${results.windVelocity.toFixed(2)} mph × ${results.terrainFactor} = <strong>${results.effectiveWindVelocity.toFixed(2)} mph</strong></p>
             <p class="sub-calculation">The Wind Effectiveness coefficient (Cv) is set to <strong>${results.cvWindEffectiveness.toString()}</strong> based on the selected building orientation. This coefficient accounts for the angle of the prevailing wind relative to the vent openings.</p>
-            <p class="calculation">Wind Flow per Area (F_w) = C4 × Cv × V_eff × C_eff = ${results.C4_WIND_UNITS.toFixed(1)} × ${results.cvWindEffectiveness.toString()} × ${results.effectiveWindVelocity.toFixed(2)} × ${results.cEff.toFixed(2)} = <strong>${results.windFlowPerArea.toFixed(2)} ${results.units.flow}/${results.units.area}</strong></p>
+            <p class="calculation">Wind Flow per Area (F_w) = C4 × Cv × V_eff × C_eff = ${results.C4_WIND_UNITS.toFixed(2)} × ${results.cvWindEffectiveness.toString()} × ${results.effectiveWindVelocity.toFixed(2)} × ${results.cEff.toFixed(2)} = <strong>${results.windFlowPerArea.toFixed(2)} ${results.units.flow}/${results.units.area}</strong></p>
         </div>
         <div class="info-note" style="text-align: left; margin: 1rem 0;">Note on Stack Effect: This calculation uses a formula based on the difference in air density between the inside and outside of the building. This is a first-principles approach derived from the Ideal Gas Law and provides a more accurate result across a wide range of temperatures than simplified handbook equations.</div>
         <div class="calculation-step">
@@ -937,8 +1019,8 @@ function renderDetailedSteps(results: any) {
              <p class="sub-calculation">
                 Air densities (ρ) are calculated using the Ideal Gas Law (ρ = P_atm / (R_air × T_R)):
                 <ul>
-                    <li>Inside (ρ_in): ${results.P_ATM.toFixed(2)} / (${results.R_AIR.toFixed(3)} × ${results.insideTempR.toFixed(2)}) = ${results.airDensityInside.toPrecision(4)} lb/ft³</li>
-                    <li>Outside (ρ_out): ${results.P_ATM.toFixed(2)} / (${results.R_AIR.toFixed(3)} × ${results.outsideTempR.toFixed(2)}) = ${results.airDensityOutside.toPrecision(4)} lb/ft³</li>
+                    <li>Inside (ρ_in): ${results.P_ATM.toFixed(2)} / (${results.R_AIR.toFixed(2)} × ${results.insideTempR.toFixed(2)}) = ${results.airDensityInside.toPrecision(4)} lb/ft³</li>
+                    <li>Outside (ρ_out): ${results.P_ATM.toFixed(2)} / (${results.R_AIR.toFixed(2)} × ${results.outsideTempR.toFixed(2)}) = ${results.airDensityOutside.toPrecision(4)} lb/ft³</li>
                     <li>Difference (|Δρ|): |${results.airDensityInside.toPrecision(4)} - ${results.airDensityOutside.toPrecision(4)}| = ${results.airDensityDifference.toPrecision(4)} lb/ft³</li>
                 </ul>
             </p>
@@ -946,7 +1028,7 @@ function renderDetailedSteps(results: any) {
                 <br>ρ_avg = (ρ_in + ρ_out) / 2 = (${results.airDensityInside.toPrecision(4)} + ${results.airDensityOutside.toPrecision(4)}) / 2 = <strong>${results.rhoAvg.toPrecision(4)} lb/ft³</strong>
             </p>
             <p class="sub-calculation">The Discharge Coefficient (K) for the selected vent type is <strong>${results.kDischargeCoeff}</strong>.</p>
-            <p class="calculation">Stack Flow per Area (F_s) = 60 × K × C_eff × √(g × H × |Δρ| / ρ_avg) = 60 × ${results.kDischargeCoeff} × ${results.cEff.toFixed(2)} × √(${results.G.toFixed(1)} × ${results.height.toFixed(2)} × ${results.airDensityDifference.toPrecision(4)} / ${results.rhoAvg.toPrecision(4)}) = <strong>${results.stackFlowPerArea.toFixed(2)} ${results.units.flow}/${results.units.area}</strong></p>
+            <p class="calculation">Stack Flow per Area (F_s) = 60 × K × C_eff × √(g × H × |Δρ| / ρ_avg) = 60 × ${results.kDischargeCoeff} × ${results.cEff.toFixed(2)} × √(${results.G.toFixed(2)} × ${results.height.toFixed(2)} × ${results.airDensityDifference.toPrecision(4)} / ${results.rhoAvg.toPrecision(4)}) = <strong>${results.stackFlowPerArea.toFixed(2)} ${results.units.flow}/${results.units.area}</strong></p>
         </div>
          <div class="calculation-step">
             <p class="formula">3. Total Flow per Unit Area (F_total)</p>
@@ -1066,18 +1148,28 @@ function handleLoadCalculation(event: Event) {
 
             // Populate form
             for (const key in loadedData.formData) {
+                const value = loadedData.formData[key];
+                
+                // Special handling for radio buttons, which are grouped by name.
+                const radioButtons = document.querySelectorAll(`input[type="radio"][name="${key}"]`) as NodeListOf<HTMLInputElement>;
+                if (radioButtons.length > 0) {
+                    radioButtons.forEach(radio => {
+                        radio.checked = (radio.value === value);
+                    });
+                    continue; // Radio group handled, move to next key.
+                }
+
+                // Handle all other elements (input, select) by ID, as their ID matches their name.
                 const element = document.getElementById(key) as HTMLInputElement | HTMLSelectElement;
                 if (element) {
-                     if (element.type === 'radio') {
-                        (element as HTMLInputElement).checked = element.value === loadedData.formData[key];
-                    } else {
-                        element.value = loadedData.formData[key];
-                    }
+                    element.value = value;
                 }
             }
             
             // Manually update UI elements that depend on selections
+            // Fix: Call the implemented `populateFugitiveSourceTypes` function.
             populateFugitiveSourceTypes(); // Update component list based on now-selected factor set
+            // Fix: Call the implemented `renderFugitiveSourcesList` function.
             renderFugitiveSourcesList(); // Render the restored sources
             calculationMethodSelect.dispatchEvent(new Event('change')); // Show/hide fugitive section
             handleModeChange(); // Show/hide verification inputs
@@ -1127,7 +1219,7 @@ function renderResultsSummaryReport(results: any, formData: any, recommendations
             <tr>
                 <td>${factors[src.type].label}</td>
                 <td>${src.quantity}</td>
-                <td>${(factors[src.type].rateCFM * src.quantity).toFixed(4)}</td>
+                <td>${(factors[src.type].rateCFM * src.quantity).toFixed(2)}</td>
             </tr>
         `).join('');
 
@@ -1142,7 +1234,7 @@ function renderResultsSummaryReport(results: any, formData: any, recommendations
                     </table>
                 </td>
             </tr>
-            <tr><td><strong>Total Leak Rate (Q_leak)</strong></td><td><strong>${leakRate.toFixed(4)}</strong></td><td><strong>${units.flow}</strong></td></tr>
+            <tr><td><strong>Total Leak Rate (Q_leak)</strong></td><td><strong>${leakRate.toFixed(2)}</strong></td><td><strong>${units.flow}</strong></td></tr>
             <tr><td>Gas LFL</td><td>${lfl}</td><td>%</td></tr>
             <tr><td>Safety Factor (C)</td><td>${safetyFactor}</td><td>--</td></tr>
         `;
@@ -1160,7 +1252,7 @@ function renderResultsSummaryReport(results: any, formData: any, recommendations
     const recommendationsHtml = recommendations.map(rec => `<li>${rec}</li>`).join('');
 
     const areaMethodDescription = `The Area Method, as outlined in AGA Report No. XL1001, provides a conservative approach for determining ventilation requirements in general-purpose buildings where specific sources of gas release are not defined. The required ventilation rate is determined as the greater of two calculations: one based on achieving a minimum number of air changes per hour (ACH), and another based on the building's floor area. This ensures a baseline level of air quality and safety by providing sufficient airflow to dilute minor, unforeseen fugitive emissions.`;
-    const fugitiveMethodDescription = `The Fugitive Emission Method, based on guidelines from API Recommended Practice 500, is a targeted approach used when a potential leak source can be quantified. This method calculates the precise ventilation rate required to dilute the substance from a known potential leak (Q_leak) to a concentration well below its Lower Flammable Limit (LFL). A safety factor (C), typically 0.25 for 25% LFL, is applied to ensure the atmosphere remains non-hazardous. This method is ideal for enclosures containing equipment with known or estimated leak rates.`;
+    const fugitiveMethodDescription = `The Fugitive Emission Method, based on guidelines from API Recommended Practice 500, is a targeted approach used when a potential leak source can be quantified. This method calculates the precise ventilation rate required to dilute the substance from a known potential leak ($Q_{\\text{leak}}$) to a concentration well below its Lower Flammable Limit (LFL). A safety factor (C), typically 0.25 for 25% LFL, is applied to ensure the atmosphere remains non-hazardous. This method is ideal for enclosures containing equipment with known or estimated leak rates.`;
     const methodDescription = method === 'area-method' ? areaMethodDescription : fugitiveMethodDescription;
 
     let sourcesHtml = '';
@@ -1169,7 +1261,7 @@ function renderResultsSummaryReport(results: any, formData: any, recommendations
             <h4>Data Sources</h4>
             <p>The component emission factors and conversion methodology are sourced from the following industry-standard documents:</p>
             <ul>
-                <li><strong>Emission Factor Data:</strong> U.S. Environmental Protection Agency (EPA) "Protocol for Equipment Leak Emission Estimates" — EPA-453/R-95-017, November 1995, Table 2-4.</li>
+                <li><strong>Emission Factor Data:</strong> U.S. Environmental Protection Agency (EPA) "Protocol for Equipment Leak Emission Estimates" — EPA-453/R-95-017, November 195, Table 2-4.</li>
                 <li><strong>Conversion Methodology:</strong> API Recommended Practice 500 (API RP 500), 2014 Edition, Appendix B.1 — Gas Leakage and Ventilation Calculations.</li>
             </ul>
         `;
@@ -1218,9 +1310,6 @@ function renderResultsSummaryReport(results: any, formData: any, recommendations
 
     const reportHtml = `
         <h2>Calculation Report</h2>
-        <div class="results-actions">
-            <button id="download-summary-pdf-btn">Download Report as PDF</button>
-        </div>
 
         <h3>Executive Summary</h3>
         ${executiveSummary}
@@ -1286,340 +1375,7 @@ function renderResultsSummaryReport(results: any, formData: any, recommendations
     if(originalDetails && cloneTarget) {
         cloneTarget.innerHTML = originalDetails.innerHTML.replace(/<h3>/g, '<h4>').replace(/<\/h3>/g, '</h4>');
     }
-
-    // Add event listener for the new PDF download button
-    document.getElementById('download-summary-pdf-btn')?.addEventListener('click', async () => {
-        await generateSummaryPdfReport(formData, results, recommendations, assumptions, methodDescription);
-    });
 }
-
-const addVisualsToPdf = async (doc: jsPDF, results: any, yPos: { y: number }): Promise<void> => {
-    const pageHeight = doc.internal.pageSize.height;
-    const margin = 15;
-    const contentWidth = doc.internal.pageSize.getWidth() - 2 * margin;
-
-    const checkPageBreak = (neededHeight: number) => {
-        if (yPos.y + neededHeight > pageHeight - margin) {
-            doc.addPage();
-            yPos.y = margin;
-        }
-    };
-
-    checkPageBreak(120); // Estimate for this section
-
-    doc.setFontSize(14);
-    doc.text('Visual Summary', margin, yPos.y);
-    yPos.y += 10;
-
-    const addIsometricPromise = new Promise<void>((resolve) => {
-        const svgString = generateIsometricViewSvg(results);
-        const img = new Image();
-        const svgUrl = 'data:image/svg+xml;base64,' + btoa(svgString);
-
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = 250 * 2;
-            canvas.height = 160 * 2;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                ctx.fillStyle = 'white';
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                const pngUrl = canvas.toDataURL('image/png');
-                
-                doc.setFontSize(11);
-                doc.text('Building Isometric View', margin, yPos.y);
-                yPos.y += 6;
-                
-                const imgProps = doc.getImageProperties(pngUrl);
-                const imgWidth = contentWidth * 0.7;
-                const imgHeight = (imgProps.height * imgWidth) / imgProps.width;
-
-                checkPageBreak(imgHeight + 10);
-                
-                const xOffset = (contentWidth - imgWidth) / 2;
-                doc.addImage(pngUrl, 'PNG', margin + xOffset, yPos.y, imgWidth, imgHeight);
-                yPos.y += imgHeight + 10;
-            }
-            resolve();
-        };
-        img.onerror = () => { console.error("Failed to load SVG for PDF."); resolve(); };
-        img.src = svgUrl;
-    });
-
-    await addIsometricPromise;
-
-    checkPageBreak(50);
-
-    doc.setFontSize(11);
-    doc.text('Ventilation Force Contribution', margin, yPos.y);
-    yPos.y += 7;
-
-    const totalFlow = results.totalFlowPerArea;
-    const windPerc = totalFlow > 0 ? (Math.pow(results.windFlowPerArea, 2) / Math.pow(totalFlow, 2)) * 100 : 0;
-    const stackPerc = totalFlow > 0 ? (Math.pow(results.stackFlowPerArea, 2) / Math.pow(totalFlow, 2)) * 100 : 0;
-    
-    const barHeight = 7;
-    const barWidth = contentWidth * 0.8;
-    const barX = margin + (contentWidth - barWidth) / 2;
-
-    doc.setFontSize(9);
-    doc.text(`Wind Effect (${windPerc.toFixed(1)}%)`, margin, yPos.y);
-    yPos.y += 4;
-    doc.setFillColor(0, 123, 255);
-    doc.rect(barX, yPos.y, barWidth * (windPerc / 100), barHeight, 'F');
-    yPos.y += barHeight + 5;
-
-    doc.text(`Stack Effect (${stackPerc.toFixed(1)}%)`, margin, yPos.y);
-    yPos.y += 4;
-    doc.setFillColor(40, 167, 69);
-    doc.rect(barX, yPos.y, barWidth * (stackPerc / 100), barHeight, 'F');
-    yPos.y += barHeight + 10;
-};
-
-async function generateSummaryPdfReport(formData: any, results: any, recommendations: string[], assumptions: string[], methodDescription: string) {
-    const doc = new jsPDF({ unit: 'pt' });
-    const pageHeight = doc.internal.pageSize.height;
-    const pageWidth = doc.internal.pageSize.width;
-    const margin = 50;
-    let yPos = { y: margin }; // Use an object to pass by reference
-
-    // Helper functions for PDF generation
-    const checkPageBreak = (neededHeight: number) => {
-        if (yPos.y + neededHeight > pageHeight - margin) {
-            doc.addPage();
-            yPos.y = margin;
-        }
-    };
-    const addHeading = (text: string, size = 14) => {
-        checkPageBreak(size + 15);
-        doc.setFontSize(size);
-        doc.text(text, margin, yPos.y);
-        yPos.y += size + 5;
-    };
-    const addSubHeading = (text: string) => {
-        checkPageBreak(18);
-        doc.setFontSize(11);
-        doc.text(text, margin, yPos.y);
-        yPos.y += 18;
-    };
-    const addText = (text: string | string[], indent = 0) => {
-        doc.setFontSize(10);
-        const textToSplit = Array.isArray(text) ? text.join('\n') : text;
-        const lines = doc.splitTextToSize(textToSplit, pageWidth - (margin * 2) - indent);
-        checkPageBreak(lines.length * 12 + 5);
-        doc.text(lines, margin + indent, yPos.y);
-        yPos.y += lines.length * 12 + 5;
-    };
-     const addDiagramToPdf = async (): Promise<void> => {
-        return new Promise((resolve) => {
-            const svgElement = document.getElementById('diagram-canvas') as unknown as SVGSVGElement;
-            if (!svgElement || diagramState.equipment.length === 0) return resolve();
-            
-            const svgClone = svgElement.cloneNode(true) as SVGSVGElement;
-            svgClone.setAttribute('width', svgElement.clientWidth.toString());
-            svgClone.setAttribute('height', svgElement.clientHeight.toString());
-
-            let cssText = '';
-            const relevantSelectors = ['.building-outline', '.equipment-icon', '.zone-div1', '.zone-div2', 'text'];
-            for (const sheet of Array.from(document.styleSheets)) {
-                try {
-                    if (!sheet.cssRules) continue;
-                    for (const rule of Array.from(sheet.cssRules)) {
-                        if (rule instanceof CSSStyleRule && relevantSelectors.some(s => rule.selectorText.includes(s))) {
-                            cssText += rule.cssText + '\n';
-                        }
-                    }
-                } catch (e) { console.warn("Could not read CSS rules from stylesheet: " + sheet.href, e); }
-            }
-    
-            const styleElement = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-            styleElement.textContent = cssText;
-            svgClone.prepend(styleElement);
-
-            const svgString = new XMLSerializer().serializeToString(svgClone);
-            const img = new Image();
-            const svgUrl = 'data:image/svg+xml;base64,' + btoa(svgString);
-
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                canvas.width = svgElement.clientWidth * 2;
-                canvas.height = svgElement.clientHeight * 2;
-                const ctx = canvas.getContext('2d');
-                if (ctx) {
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    const pngUrl = canvas.toDataURL('image/png');
-                    
-                    const imgProps = doc.getImageProperties(pngUrl);
-                    const pdfWidth = pageWidth - 2 * margin;
-                    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-                    
-                    const neededHeight = 14 + 10 + 12 + pdfHeight + 10;
-                    checkPageBreak(neededHeight);
-
-                    addHeading('Hazardous Area Classification Diagram');
-                    addText('The following is a top-down, to-scale diagram of the building floor plan with classified areas based on the placed equipment.');
-                    yPos.y += 5;
-
-                    doc.addImage(pngUrl, 'PNG', margin, yPos.y, pdfWidth, pdfHeight);
-                    yPos.y += pdfHeight + 10;
-                }
-                resolve();
-            };
-            img.onerror = () => { console.error("Failed to load SVG for PDF."); resolve(); };
-            img.src = svgUrl;
-        });
-    };
-
-    // --- 1. Title Page ---
-    doc.setFontSize(24);
-    doc.text("Natural Ventilation Calculation Report", pageWidth / 2, pageHeight / 2 - 100, { align: 'center' });
-    doc.setFontSize(14);
-    doc.text("For Electrical Area Classification", pageWidth / 2, pageHeight / 2 - 80, { align: 'center' });
-    doc.setFontSize(12);
-    doc.text(`Project: ${formData['project-name'] || 'N/A'}`, pageWidth / 2, pageHeight / 2, { align: 'center' });
-    doc.text(`Location: ${formData.location || 'N/A'}`, pageWidth / 2, pageHeight / 2 + 20, { align: 'center' });
-    doc.setFontSize(10);
-    doc.text(`Company: ${formData.company || 'N/A'}`, pageWidth / 2, pageHeight - 120, { align: 'center' });
-    doc.text(`Performed By: ${formData['performed-by'] || 'N/A'}`, pageWidth / 2, pageHeight - 105, { align: 'center' });
-    doc.text(`Date: ${formData.date || 'N/A'}`, pageWidth / 2, pageHeight - 90, { align: 'center' });
-    doc.addPage();
-    yPos.y = margin;
-
-    // --- 2. Executive Summary ---
-    addHeading('Executive Summary');
-    const methodTitle = results.method === 'area-method' ? 'Area Method (AGA XL1001)' : 'Fugitive Emission Method (API RP 500)';
-    let summaryText = results.mode === 'verification'
-        ? `This report analyzes the existing natural ventilation for the specified building to verify its adequacy based on the ${methodTitle}. The analysis concluded that the existing ventilation is ${results.status}.`
-        : `This report details the calculation of required natural ventilation for the specified building, based on the ${methodTitle}. The final required gross ventilation area is ${isFinite(results.requiredGrossInletArea) ? results.requiredGrossInletArea.toFixed(2) : 'Not Achievable'} ${results.units.area} for the inlet and ${isFinite(results.requiredGrossOutletArea) ? results.requiredGrossOutletArea.toFixed(2) : 'Not Achievable'} ${results.units.area} for the outlet.`;
-    addText(summaryText);
-    yPos.y += 5;
-    let resultsBody = results.mode === 'verification'
-        ? [
-            ['Required Ventilation Rate', `${results.requiredVentilationRate.toFixed(2)} ${results.units.flow}`],
-            ['Actual Provided Ventilation', `${results.actualVentilationRate.toFixed(2)} ${results.units.flow}`],
-            ['Status', results.status],
-            ['Surplus / Deficit', `${results.flowDifference.toFixed(2)} ${results.units.flow}`]
-        ] : [
-            ['Required Gross Inlet Area', `${isFinite(results.requiredGrossInletArea) ? results.requiredGrossInletArea.toFixed(2) + ` ${results.units.area}` : 'N/A'}`],
-            ['Required Gross Outlet Area', `${isFinite(results.requiredGrossOutletArea) ? results.requiredGrossOutletArea.toFixed(2) + ` ${results.units.area}` : 'N/A'}`]
-        ];
-    autoTable(doc, { startY: yPos.y, head: [['Description', 'Value']], body: resultsBody, theme: 'grid' });
-    yPos.y = (doc as any).lastAutoTable.finalY + 15;
-
-    // --- 3. Visual Summary ---
-    await addVisualsToPdf(doc, results, yPos);
-
-    // --- 4. Input Data ---
-    addHeading('Input Data Summary');
-    let inputBody = [
-        [{ content: 'Project Information', colSpan: 3, styles: { fontStyle: 'bold' } }],
-        ['Project Name', formData['project-name'], '--'],
-        ['Location', formData.location, '--'],
-        ['Company', formData.company, '--'],
-        ['Performed By', formData['performed-by'], '--'],
-        ['Date', formData.date, '--'],
-        [{ content: 'Building & Environmental Data', colSpan: 3, styles: { fontStyle: 'bold' } }],
-        ['Gas Type', getSelectText('gas-type'), '--'],
-        ['Building Dimensions (LxWxH)', `${results.length.toFixed(2)} x ${results.width.toFixed(2)} x ${results.height.toFixed(2)}`, results.units.length],
-        ['Temperatures (In/Out)', `${results.insideTemp.toFixed(2)} / ${results.outsideTemp.toFixed(2)}`, results.units.temp],
-        ['Average Wind Velocity', results.windVelocity.toFixed(2), results.units.velocity],
-        ['Building Orientation', getSelectText('building-orientation'), '--'],
-        ['Surrounding Terrain', getSelectText('surrounding-terrain'), '--'],
-    ];
-    if (results.mode === 'verification') {
-        inputBody.push(
-            [{ content: 'Existing Vent Data', colSpan: 3, styles: { fontStyle: 'bold' } }],
-            ['Existing Inlet Gross Area', results.existingInletArea.toFixed(2), results.units.area],
-            ['Existing Outlet Gross Area', results.existingOutletArea.toFixed(2), results.units.area]
-        );
-    }
-    inputBody.push([{ content: 'Calculation Method', colSpan: 3, styles: { fontStyle: 'bold' } }], ['Method Selected', methodTitle, '']);
-    if (results.method === 'fugitive-emission-method') {
-        const factorSetKey = results.fugitiveFactorSet;
-        const factors = FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey].factors;
-        inputBody.push([{ content: 'Fugitive Emission Sources', colSpan: 3, styles: { fontStyle: 'bold' } }], ['Factor Set', FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey].name, '']);
-        results.fugitiveSources.forEach((src: any) => inputBody.push([factors[src.type].label, `Qty: ${src.quantity}`, `${(factors[src.type].rateCFM * src.quantity).toFixed(4)} CFM`]));
-        inputBody.push(
-            [{ content: `Total Leak Rate (Q_leak): ${results.leakRate.toFixed(4)} CFM`, colSpan: 3, styles: { fontStyle: 'bold' } }],
-            ['Gas LFL', results.lfl, '%'],
-            ['Safety Factor (C)', results.safetyFactor, '--'],
-        );
-    }
-    autoTable(doc, { startY: yPos.y, head: [['Parameter', 'Value', 'Unit']], body: inputBody, theme: 'grid' });
-    yPos.y = (doc as any).lastAutoTable.finalY + 15;
-
-    // --- 5. Methodology and Standards ---
-    addHeading('Methodology and Standards');
-    addText(methodDescription);
-    if (results.method === 'fugitive-emission-method') {
-        addSubHeading('Data Sources');
-        addText([
-            '• Emission Factor Data: U.S. Environmental Protection Agency (EPA) "Protocol for Equipment Leak Emission Estimates" — EPA-453/R-95-017, November 1995, Table 2-4.',
-            '• Conversion Methodology: API Recommended Practice 500 (API RP 500), 2014 Edition, Appendix B.1 — Gas Leakage and Ventilation Calculations.'
-        ]);
-    }
-    addText("Note on Stack Effect: This calculation uses a formula based on the difference in air density between the inside and outside of the building. This is a first-principles approach derived from the Ideal Gas Law and provides a more accurate result across a wide range of temperatures than simplified handbook equations.");
-    
-    // --- 6. Step-by-Step Calculation ---
-    addHeading('Step-by-Step Calculation');
-    addSubHeading('Step 1: Determine Required Ventilation Rate (Qv)');
-    if(results.method === 'area-method') {
-        addText([
-            `1a. Rate from Air Changes (Qv_ACH) = Vol / 5 min = ${results.buildingVolume.toFixed(2)} / 5 = ${results.requiredRateFromACH.toFixed(2)} CFM`,
-            `1b. Rate from Floor Area (Qv_Floor) = Area * 1.5 = ${results.floorArea.toFixed(2)} * 1.5 = ${results.requiredRateFromFloorArea.toFixed(2)} CFM`,
-            `1c. Controlling Rate (Qv) = max(Qv_ACH, Qv_Floor) = ${results.requiredVentilationRate.toFixed(2)} CFM`
-        ], 10);
-    } else {
-        addText(`1a. Total Leak Rate (Q_leak) calculated from components = ${results.leakRate.toFixed(4)} CFM`, 10);
-        addText(`1b. Required Ventilation (Qv) = Q_leak / (C * (LFL/100)) = ${results.leakRate.toFixed(4)} / (${results.safetyFactor} * ${results.lfl/100}) = ${results.requiredVentilationRate.toFixed(2)} CFM`, 10);
-    }
-    addSubHeading('Step 2: Calculate Natural Ventilation Driving Forces');
-    addText([
-        `2a. Effective Obstruction (C_eff) = (Inlet% + Outlet%)/2 = (${results.inletObstruction} + ${results.outletObstruction})/2 = ${results.cEff.toFixed(2)}`,
-        `2b. Wind Effect (F_w) = C4 * Cv * V_eff * C_eff = ${results.C4_WIND_UNITS} * ${results.cvWindEffectiveness} * ${results.effectiveWindVelocity.toFixed(2)} * ${results.cEff.toFixed(2)} = ${results.windFlowPerArea.toFixed(2)} CFM/ft²`,
-        `2c. Air Density (ρ_in / ρ_out) = ${results.airDensityInside.toPrecision(4)} / ${results.airDensityOutside.toPrecision(4)} lb/ft³`,
-        `2d. Stack Effect (F_s) = 60*K*C_eff*sqrt(g*H*|Δρ|/ρ_avg) = ${results.stackFlowPerArea.toFixed(2)} CFM/ft²`,
-        `2e. Total Flow (F_total) = sqrt(F_w² + F_s²) = ${results.totalFlowPerArea.toFixed(2)} CFM/ft²`
-    ], 10);
-    if(results.mode === 'design') {
-        addSubHeading('Step 3 & 4: Calculate Required Vent Areas');
-        addText([
-            `3a. Required Free Area (A_req) = Qv / F_total = ${results.requiredVentilationRate.toFixed(2)} / ${results.totalFlowPerArea.toFixed(2)} = ${isFinite(results.finalRequiredArea) ? results.finalRequiredArea.toFixed(2) : 'N/A'} ft²`,
-            `4a. Gross Inlet Area = A_req / Obstruct_in = ${results.finalRequiredArea.toFixed(2)} / ${results.inletObstruction} = ${isFinite(results.requiredGrossInletArea) ? results.requiredGrossInletArea.toFixed(2) : 'N/A'} ft²`,
-            `4b. Gross Outlet Area = A_req / Obstruct_out = ${results.finalRequiredArea.toFixed(2)} / ${results.outletObstruction} = ${isFinite(results.requiredGrossOutletArea) ? results.requiredGrossOutletArea.toFixed(2) : 'N/A'} ft²`
-        ], 10);
-    } else {
-        addSubHeading('Step 3 & 4: Verify Existing Ventilation');
-        addText([
-            `3a. Limiting Free Area (A_limit) = min(Inlet_free, Outlet_free) = ${results.limitingFreeArea.toFixed(2)} ft²`,
-            `3b. Actual Ventilation (Qa) = A_limit * F_total = ${results.limitingFreeArea.toFixed(2)} * ${results.totalFlowPerArea.toFixed(2)} = ${results.actualVentilationRate.toFixed(2)} CFM`,
-            `4a. Comparison: Qa (${results.actualVentilationRate.toFixed(2)}) vs Qv (${results.requiredVentilationRate.toFixed(2)}) -> ${results.status}`
-        ], 10);
-    }
-
-    // --- 7. Assumptions ---
-    addHeading('Assumptions');
-    addText(assumptions.map(a => `• ${a}`));
-
-    // --- 8. Conclusion ---
-    addHeading('Conclusion');
-    const conclusionText = results.mode === 'verification'
-        ? `The existing natural ventilation system was analyzed and found to be ${results.status} for the specified conditions and the ${methodTitle} methodology.`
-        : `The total required gross area for natural ventilation has been calculated to be ${isFinite(results.requiredGrossInletArea) ? results.requiredGrossInletArea.toFixed(2) : 'Not Achievable'} ${results.units.area} for the air inlet and ${isFinite(results.requiredGrossOutletArea) ? results.requiredGrossOutletArea.toFixed(2) : 'Not Achievable'} ${results.units.area} for the air outlet. This is based on the input parameters and the ${methodTitle} methodology.`;
-    addText(conclusionText);
-
-    // --- 9. Recommendations ---
-    addHeading('Analysis & Recommendations');
-    addText(recommendations.map(r => `• ${r}`));
-
-    // --- 10. Diagram ---
-    await addDiagramToPdf();
-
-    const projectName = formData['project-name'] || 'ventilation-report';
-    doc.save(`${projectName.replace(/ /g, '_')}_Detailed_Report.pdf`);
-}
-
 
 function generateLatexReport(formData: any, results: any, recommendations: string[]): string {
     const {
@@ -1648,7 +1404,7 @@ The Fugitive Emission Method, based on guidelines from API Recommended Practice 
     `;
     
     const methodDescription = method === 'area-method' ? areaMethodDescription : fugitiveMethodDescription;
-    const methodTitle = method === 'area-method' ? 'Area Method (AGA XL1001)' : 'Fugitive Emission Method (API RP 500)';
+    const methodTitle = method === 'area-method' ? 'Area Method (AGA XL1001)' : 'Fugitive Emission Method (API RP 500 ANNEX B)';
 
     let sourcesLatex = '';
     if (method === 'fugitive-emission-method') {
@@ -1700,7 +1456,7 @@ Q_v &= \\max(Q_{v,ACH}, Q_{v,\\text{Floor}}) \\\\
     } else {
         const factors = FUGITIVE_EMISSION_FACTOR_SETS[fugitiveFactorSet].factors;
         const sourceRows = fugitiveSources.map((src: any) => 
-            `${escapeLatex(factors[src.type].label)} & ${src.quantity} & ${(factors[src.type].rateCFM * src.quantity).toFixed(5)} \\\\`
+            `${escapeLatex(factors[src.type].label)} & ${src.quantity} & ${(factors[src.type].rateCFM * src.quantity).toFixed(2)} \\\\`
         ).join('\n');
         
         step1CalcDetails = `
@@ -1713,7 +1469,7 @@ The total leak rate is the sum of emissions from all specified components using 
 \\midrule
 ${sourceRows}
 \\midrule
-\\multicolumn{2}{r}{\\textbf{Total Leak Rate ($Q_{\\text{leak}}$)}} & \\textbf{${leakRate.toFixed(5)}} \\\\
+\\multicolumn{2}{r}{\\textbf{Total Leak Rate ($Q_{\\text{leak}}$)}} & \\textbf{${leakRate.toFixed(2)}} \\\\
 \\bottomrule
 \\end{tabular}
 \\end{center}
@@ -1722,7 +1478,7 @@ ${sourceRows}
 The required ventilation rate is calculated to dilute the total leak rate to a safe concentration.
 \\begin{align*}
 Q_v &= \\frac{Q_{\\text{leak}}}{C \\times (LFL / 100)} \\\\
-&= \\frac{${leakRate.toFixed(5)} \\text{ CFM}}{${safetyFactor} \\times (${lfl} / 100)} = \\mathbf{${requiredVentilationRate.toFixed(2)} \\text{ CFM}}
+&= \\frac{${leakRate.toFixed(2)} \\text{ CFM}}{${safetyFactor} \\times (${lfl} / 100)} = \\mathbf{${requiredVentilationRate.toFixed(2)} \\text{ CFM}}
 \\end{align*}
         `;
     }
@@ -1747,9 +1503,9 @@ Factor Set & \\multicolumn{2}{l}{${escapeLatex(FUGITIVE_EMISSION_FACTOR_SETS[fug
         \\toprule
         Component & Qty & Leak Rate (CFM) \\\\
         \\midrule
-        ${fugitiveSources.map((src: any) => `${escapeLatex(FUGITIVE_EMISSION_FACTOR_SETS[fugitiveFactorSet].factors[src.type].label)} & ${src.quantity} & ${(FUGITIVE_EMISSION_FACTOR_SETS[fugitiveFactorSet].factors[src.type].rateCFM * src.quantity).toFixed(5)} \\\\`).join('\n')}
+        ${fugitiveSources.map((src: any) => `${escapeLatex(FUGITIVE_EMISSION_FACTOR_SETS[fugitiveFactorSet].factors[src.type].label)} & ${src.quantity} & ${(FUGITIVE_EMISSION_FACTOR_SETS[fugitiveFactorSet].factors[src.type].rateCFM * src.quantity).toFixed(2)} \\\\`).join('\n')}
         \\midrule
-        \\multicolumn{2}{r}{\\textbf{Total}} & \\textbf{${leakRate.toFixed(5)}} \\\\
+        \\multicolumn{2}{r}{\\textbf{Total}} & \\textbf{${leakRate.toFixed(2)}} \\\\
         \\bottomrule
     \\end{tabular}
 } \\\\
@@ -1779,11 +1535,11 @@ Existing Outlet Gross Area & ${results.existingOutletArea.toFixed(2)} & ${latexA
 The following chart illustrates the relative contribution of wind and stack effects to the total natural ventilation driving force.
 \\vspace{5mm}
 \\noindent
-Wind Effect (${windPerc.toFixed(1)}\\%) \\\\
+Wind Effect (${windPerc.toFixed(2)}\\%) \\\\
 \\colorbox{SteelBlue}{\\rule{${windScale}\\linewidth}{12pt}}
 \\vspace{2mm}
 \\noindent
-Stack Effect (${stackPerc.toFixed(1)}\\%) \\\\
+Stack Effect (${stackPerc.toFixed(2)}\\%) \\\\
 \\colorbox{ForestGreen}{\\rule{${stackScale}\\linewidth}{12pt}}
 \\subsection*{Building Isometric View}
 The diagram below is a placeholder for the building's isometric view, which illustrates the ventilation strategy (inlet/outlet placement) based on the selected gas type.
@@ -1988,7 +1744,7 @@ ${fugitiveMethodInputsLatex}
 \\section{Methodology and Standards}
 The calculation was performed using the \\textbf{${escapeLatex(methodTitle)}}.
 
-${escapeLatex(methodDescription)}
+${methodDescription}
 ${sourcesLatex}
 
 Note on Stack Effect: This calculation uses a formula based on the difference in air density between the inside and outside of the building. This is a first-principles approach derived from the Ideal Gas Law and provides a more accurate result across a wide range of temperatures than simplified handbook equations.
@@ -2110,84 +1866,101 @@ ${recItems}
     `;
 }
 
-function generatePdfReport(formData: any, results: any, recommendations: string[]) {
-    const doc = new jsPDF();
-    let y = 20;
+// --- Diagram Generation ---
+// State variables for diagram interaction
+let isPanning = false;
+let isDraggingEquipment = false;
+let draggedEquipmentInfo: { id: number; startX: number; startY: number; mouseStartX: number; mouseStartY: number; } | null = null;
+let lastMousePos = { x: 0, y: 0 };
 
-    doc.setFontSize(18);
-    doc.text("Natural Ventilation Calculation Report", 105, y, { align: 'center' });
-    y += 15;
-
-    doc.setFontSize(12);
-    doc.text("Project Information", 14, y);
-    y += 8;
-    doc.setFontSize(10);
-    doc.text(`Project Name: ${formData['project-name']}`, 14, y);
-    doc.text(`Location: ${formData.location}`, 120, y);
-    y += 6;
-    doc.text(`Company: ${formData.company}`, 14, y);
-    doc.text(`Date: ${formData.date}`, 120, y);
-    y += 6;
-    doc.text(`Performed By: ${formData['performed-by']}`, 14, y);
-    y+= 10;
-    
-    doc.setFontSize(12);
-    doc.text("Summary of Results", 14, y);
-    y += 8;
-    doc.setFontSize(10);
-    if(results.mode === 'verification') {
-        doc.text(`Required Ventilation Rate: ${results.requiredVentilationRate.toFixed(2)} ${results.units.flow}`, 14, y);
-        y += 6;
-        doc.text(`Actual Provided Ventilation Rate: ${results.actualVentilationRate.toFixed(2)} ${results.units.flow}`, 14, y);
-        y += 6;
-        doc.text(`Status: ${results.status}`, 14, y);
-    } else {
-        doc.text(`Required Gross Inlet Area: ${isFinite(results.requiredGrossInletArea) ? results.requiredGrossInletArea.toFixed(2) : 'N/A'} ${results.units.area}`, 14, y);
-        y += 6;
-        doc.text(`Required Gross Outlet Area: ${isFinite(results.requiredGrossOutletArea) ? results.requiredGrossOutletArea.toFixed(2) : 'N/A'} ${results.units.area}`, 14, y);
+// Fix: Implement `updateEquipmentList` to render the list of placed equipment.
+function updateEquipmentList() {
+    equipmentList.innerHTML = '';
+    if (diagramState.equipment.length === 0) {
+        equipmentList.innerHTML = '<li>No equipment added. Drag items from the palette onto the diagram.</li>';
+        return;
     }
-    y += 10;
+    diagramState.equipment.forEach(eq => {
+        const eqInfo = EQUIPMENT_ZONES[eq.type];
+        if (!eqInfo) return;
 
-    doc.setFontSize(12);
-    doc.text("Analysis & Recommendations", 14, y);
-    y += 8;
-    doc.setFontSize(10);
-    const recLines = doc.splitTextToSize(recommendations.map(rec => `- ${rec}`).join('\n'), 180);
-    doc.text(recLines, 14, y);
-    y += recLines.length * 5 + 4;
-    
-    doc.setFontSize(12);
-    doc.text("Input Data", 14, y);
-    y += 8;
-    doc.setFontSize(10);
-    doc.text(`Building Length: ${results.length.toFixed(2)} ${results.units.length}`, 14, y);
-    doc.text(`Building Width: ${results.width.toFixed(2)} ${results.units.length}`, 120, y);
-    y += 6;
-    doc.text(`Vertical Vent Separation: ${results.height.toFixed(2)} ${results.units.length}`, 14, y);
-    doc.text(`Inside Temp: ${results.insideTemp.toFixed(2)} ${results.units.temp}`, 120, y);
-    y += 6;
-    doc.text(`Outside Temp: ${results.outsideTemp.toFixed(2)} ${results.units.temp}`, 14, y);
-    doc.text(`Wind Velocity: ${results.windVelocity.toFixed(2)} ${results.units.velocity}`, 120, y);
-    y += 6;
-    doc.text(`Building Orientation: ${getSelectText('building-orientation')}`, 14, y);
-    doc.text(`Surrounding Terrain: ${getSelectText('surrounding-terrain')}`, 120, y);
-    y += 6;
-    doc.text(`Vent Opening Type (K): ${getSelectText('vent-opening-type')}`, 14, y);
-    y += 10;
-    
-    doc.setFontSize(12);
-    doc.text("Calculation Details", 14, y);
-    y += 8;
-    doc.setFontSize(10);
-    doc.text(`Required Ventilation Rate (Qv): ${results.requiredVentilationRate.toFixed(2)} ${results.units.flow}`, 14, y);
-    y += 6;
-    doc.text(`Total Flow per Unit Area (F_total): ${results.totalFlowPerArea.toFixed(2)} ${results.units.flow}/${results.units.area}`, 14, y);
-    
-    const projectName = formData['project-name'] || 'ventilation-report';
-    doc.save(`${projectName.replace(/ /g, '_')}.pdf`);
+        const listItem = document.createElement('li');
+        listItem.innerHTML = `
+            <span>${eqInfo.label} (at ${eq.x.toFixed(1)}', ${eq.y.toFixed(1)}')</span>
+            <button class="remove-equipment-btn" data-id="${eq.id}" title="Remove this item">&times;</button>
+        `;
+        equipmentList.appendChild(listItem);
+    });
 }
 
-// --- Diagram Generation ---
+// Fix: Implement `renderDiagram` to draw the building and equipment on the SVG canvas.
+function renderDiagram() {
+    if (!diagramCanvas) return;
+
+    // Clear previous render
+    while (diagramCanvas.firstChild) {
+        diagramCanvas.removeChild(diagramCanvas.firstChild);
+    }
+    
+    const transformGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    transformGroup.setAttribute('transform', `translate(${diagramState.transform.translateX}, ${diagramState.transform.translateY}) scale(${diagramState.transform.scale})`);
+    diagramCanvas.appendChild(transformGroup);
+    
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    transformGroup.appendChild(defs);
+
+    const building = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    building.setAttribute('x', '0');
+    building.setAttribute('y', '0');
+    building.setAttribute('width', (diagramState.building.length * diagramState.pixelsPerFoot).toString());
+    building.setAttribute('height', (diagramState.building.width * diagramState.pixelsPerFoot).toString());
+    building.setAttribute('class', 'diagram-building');
+    transformGroup.appendChild(building);
+    
+    diagramState.equipment.forEach(eq => {
+        const equipmentGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        equipmentGroup.setAttribute('class', 'equipment-group');
+        const eqInfo = EQUIPMENT_ZONES[eq.type];
+        if (!eqInfo) return;
+
+        [...eqInfo.zones].reverse().forEach(zone => {
+            const zoneCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            zoneCircle.setAttribute('cx', (eq.x * diagramState.pixelsPerFoot).toString());
+            zoneCircle.setAttribute('cy', (eq.y * diagramState.pixelsPerFoot).toString());
+            zoneCircle.setAttribute('r', (zone.radius * diagramState.pixelsPerFoot).toString());
+            zoneCircle.setAttribute('class', `zone-${zone.type.replace(' ', '-').toLowerCase()}`);
+            equipmentGroup.appendChild(zoneCircle);
+        });
+
+        const equipmentIcon = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        equipmentIcon.setAttribute('cx', (eq.x * diagramState.pixelsPerFoot).toString());
+        equipmentIcon.setAttribute('cy', (eq.y * diagramState.pixelsPerFoot).toString());
+        // Icon radius should be constant on screen, so we inverse scale it
+        equipmentIcon.setAttribute('r', (5 / diagramState.transform.scale).toString());
+        equipmentIcon.setAttribute('class', 'equipment-icon');
+        
+        equipmentIcon.addEventListener('mousedown', (e) => {
+            e.stopPropagation(); 
+            isDraggingEquipment = true;
+            isPanning = false; 
+            const mousePos = getDiagramWorldCoordinates(e);
+            draggedEquipmentInfo = {
+                id: eq.id,
+                startX: eq.x,
+                startY: eq.y,
+                mouseStartX: mousePos.x / diagramState.pixelsPerFoot,
+                mouseStartY: mousePos.y / diagramState.pixelsPerFoot,
+            };
+            diagramCanvas.classList.add('dragging-equipment');
+        });
+        
+        equipmentGroup.appendChild(equipmentIcon);
+        transformGroup.appendChild(equipmentGroup);
+    });
+    
+    updateEquipmentList();
+}
+
 function initDiagramGenerator() {
     // Populate Palette
     Object.keys(EQUIPMENT_ZONES).forEach(key => {
@@ -2202,236 +1975,195 @@ function initDiagramGenerator() {
         diagramPalette.appendChild(item);
     });
 
+    // --- Drag and Drop ---
     diagramCanvas.addEventListener('dragover', (e) => e.preventDefault());
-
     diagramCanvas.addEventListener('drop', (e) => {
         e.preventDefault();
         const type = e.dataTransfer?.getData('text/plain');
         if (type && EQUIPMENT_ZONES[type]) {
-            const svgPoint = getSVGCoordinates(e);
-            const realX = svgPoint.x / diagramState.scale;
-            const realY = svgPoint.y / diagramState.scale;
+            const worldPoint = getDiagramWorldCoordinates(e);
+
+            // Convert world pixel coordinates to feet
+            const realX = worldPoint.x / diagramState.pixelsPerFoot;
+            const realY = worldPoint.y / diagramState.pixelsPerFoot;
             
-            const buildingLengthPx = diagramState.building.length * diagramState.scale;
-            const buildingWidthPx = diagramState.building.width * diagramState.scale;
-            const canvasRect = diagramCanvas.getBoundingClientRect();
-            const offsetX = (canvasRect.width - buildingLengthPx) / 2;
-            const offsetY = (canvasRect.height - buildingWidthPx) / 2;
-
-            const droppedX = (svgPoint.x - offsetX) / diagramState.scale;
-            const droppedY = (svgPoint.y - offsetY) / diagramState.scale;
-
-            if (droppedX >= 0 && droppedX <= diagramState.building.length && droppedY >= 0 && droppedY <= diagramState.building.width) {
-                diagramState.equipment.push({ type, x: droppedX, y: droppedY });
+            // Check if drop is within building bounds
+            if (realX >= 0 && realX <= diagramState.building.length && realY >= 0 && realY <= diagramState.building.width) {
+                diagramState.equipment.push({ type, x: realX, y: realY, id: nextEquipmentId++ });
                 renderDiagram();
             }
         }
     });
 
+    // --- Pan and Zoom ---
+    diagramCanvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const zoomFactor = 1.1;
+        const { scale } = diagramState.transform;
+        const newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
+        
+        const mousePoint = getSVGCoordinates(e);
+        
+        // Adjust translation to zoom towards the mouse pointer
+        const newTranslateX = mousePoint.x - (mousePoint.x - diagramState.transform.translateX) * (newScale / scale);
+        const newTranslateY = mousePoint.y - (mousePoint.y - diagramState.transform.translateY) * (newScale / scale);
+
+        diagramState.transform.scale = newScale;
+        diagramState.transform.translateX = newTranslateX;
+        diagramState.transform.translateY = newTranslateY;
+        
+        renderDiagram();
+    });
+
+    diagramCanvas.addEventListener('mousedown', (e) => {
+        // This handler only initiates panning. Dragging is initiated by a mousedown
+        // on an equipment icon, which will stop propagation.
+        isPanning = true;
+        lastMousePos = { x: e.clientX, y: e.clientY };
+        diagramCanvas.classList.add('panning');
+    });
+
+    diagramCanvas.addEventListener('mousemove', (e) => {
+        if (isDraggingEquipment && draggedEquipmentInfo) {
+            const mousePos = getDiagramWorldCoordinates(e);
+            const mouseFeetX = mousePos.x / diagramState.pixelsPerFoot;
+            const mouseFeetY = mousePos.y / diagramState.pixelsPerFoot;
+
+            const deltaX = mouseFeetX - draggedEquipmentInfo.mouseStartX;
+            const deltaY = mouseFeetY - draggedEquipmentInfo.mouseStartY;
+
+            let newX = draggedEquipmentInfo.startX + deltaX;
+            let newY = draggedEquipmentInfo.startY + deltaY;
+            
+            // Clamp to building boundaries
+            newX = Math.max(0, Math.min(diagramState.building.length, newX));
+            newY = Math.max(0, Math.min(diagramState.building.width, newY));
+
+            const equipment = diagramState.equipment.find(eq => eq.id === draggedEquipmentInfo!.id);
+            if (equipment) {
+                equipment.x = newX;
+                equipment.y = newY;
+                renderDiagram();
+            }
+
+        } else if (isPanning) {
+            const dx = e.clientX - lastMousePos.x;
+            const dy = e.clientY - lastMousePos.y;
+            diagramState.transform.translateX += dx;
+            diagramState.transform.translateY += dy;
+            lastMousePos = { x: e.clientX, y: e.clientY };
+            renderDiagram();
+        }
+    });
+
+    const stopActions = () => {
+        isPanning = false;
+        isDraggingEquipment = false;
+        draggedEquipmentInfo = null;
+        diagramCanvas.classList.remove('panning');
+        diagramCanvas.classList.remove('dragging-equipment');
+    };
+
+    diagramCanvas.addEventListener('mouseup', stopActions);
+    diagramCanvas.addEventListener('mouseleave', stopActions);
+
+    // --- Button Controls ---
+    zoomInBtn.addEventListener('click', () => {
+        diagramState.transform.scale *= 1.2;
+        renderDiagram();
+    });
+    zoomOutBtn.addEventListener('click', () => {
+        diagramState.transform.scale /= 1.2;
+        renderDiagram();
+    });
+    resetViewBtn.addEventListener('click', () => {
+         setupDiagramCanvas(diagramState.building.width, diagramState.building.length, false);
+    });
     clearDiagramBtn.addEventListener('click', () => {
          diagramState.equipment = [];
          renderDiagram();
     });
+    
+    // --- Equipment List Deletion ---
+    equipmentList.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement;
+        const removeBtn = target.closest('.remove-equipment-btn');
+        if (removeBtn) {
+            const idToRemove = parseInt(removeBtn.getAttribute('data-id') || '-1', 10);
+            diagramState.equipment = diagramState.equipment.filter(eq => eq.id !== idToRemove);
+            renderDiagram();
+        }
+    });
 }
 
-function getSVGCoordinates(event: DragEvent): DOMPoint {
+function getSVGCoordinates(event: { clientX: number, clientY: number }): DOMPoint {
+    if (!diagramCanvas) return new DOMPoint(0, 0);
     const CTM = diagramCanvas.getScreenCTM();
     if (!CTM) return new DOMPoint(0, 0);
     return new DOMPoint(event.clientX, event.clientY).matrixTransform(CTM.inverse());
 }
 
-function setupDiagramCanvas(buildingWidthFt: number, buildingLengthFt: number) {
+function getDiagramWorldCoordinates(event: { clientX: number, clientY: number }): { x: number, y: number } {
+    const svgPoint = getSVGCoordinates(event);
+    const { scale, translateX, translateY } = diagramState.transform;
+    // Inverse transform: p_world = (p_svg - translate) / scale
+    const worldX = (svgPoint.x - translateX) / scale;
+    const worldY = (svgPoint.y - translateY) / scale;
+    return { x: worldX, y: worldY };
+}
+
+
+// Fix: Correct typo `diagram` to `diagramCanvas` and complete the truncated function.
+function setupDiagramCanvas(buildingWidthFt: number, buildingLengthFt: number, clearEquipment = true) {
+    if (!diagramCanvas) return;
     diagramState.building.width = buildingWidthFt;
     diagramState.building.length = buildingLengthFt;
-    diagramState.equipment = [];
+    if(clearEquipment) {
+        diagramState.equipment = [];
+        nextEquipmentId = 0;
+    }
 
-    const padding = 40;
+    const padding = 50; // pixels
     const canvasRect = diagramCanvas.getBoundingClientRect();
-    if(canvasRect.width === 0 || canvasRect.height === 0) return;
 
-    const availableWidth = canvasRect.width - padding * 2;
-    const availableHeight = canvasRect.height - padding * 2;
+    if (buildingLengthFt <= 0 || buildingWidthFt <= 0) {
+        diagramState.pixelsPerFoot = 1;
+        diagramState.transform = { scale: 1, translateX: 0, translateY: 0 };
+        renderDiagram();
+        return;
+    }
 
-    const scaleX = availableWidth > 0 ? availableWidth / buildingLengthFt : 1;
-    const scaleY = availableHeight > 0 ? availableHeight / buildingWidthFt : 1;
-
-    diagramState.scale = Math.min(scaleX, scaleY);
-    diagramCanvas.setAttribute('viewBox', `0 0 ${canvasRect.width} ${canvasRect.height}`);
+    // Calculate the pixels per foot ratio to fit the building in the canvas.
+    const scaleX = (canvasRect.width - 2 * padding) / buildingLengthFt;
+    const scaleY = (canvasRect.height - 2 * padding) / buildingWidthFt;
+    const pixelsPerFoot = Math.min(scaleX, scaleY);
+    diagramState.pixelsPerFoot = pixelsPerFoot > 0 ? pixelsPerFoot : 1;
     
+    // Reset transform and center the view
+    diagramState.transform.scale = 1;
+    const buildingPixelWidth = diagramState.building.length * diagramState.pixelsPerFoot;
+    const buildingPixelHeight = diagramState.building.width * diagramState.pixelsPerFoot;
+    diagramState.transform.translateX = (canvasRect.width - buildingPixelWidth) / 2;
+    diagramState.transform.translateY = (canvasRect.height - buildingPixelHeight) / 2;
+
     renderDiagram();
 }
 
-function renderDiagram() {
-    if (!diagramCanvas) return;
-    diagramCanvas.innerHTML = ''; 
-
-    const scale = diagramState.scale;
-    const buildingWidthPx = diagramState.building.width * scale;
-    const buildingLengthPx = diagramState.building.length * scale;
-    const canvasRect = diagramCanvas.getBoundingClientRect();
-    if(canvasRect.width === 0) return;
-
-    const offsetX = (canvasRect.width - buildingLengthPx) / 2;
-    const offsetY = (canvasRect.height - buildingWidthPx) / 2;
-
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.setAttribute('transform', `translate(${offsetX}, ${offsetY})`);
-    
-    const buildingRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    buildingRect.setAttribute('x', '0');
-    buildingRect.setAttribute('y', '0');
-    buildingRect.setAttribute('width', buildingLengthPx.toString());
-    buildingRect.setAttribute('height', buildingWidthPx.toString());
-    buildingRect.setAttribute('class', 'building-outline');
-    g.appendChild(buildingRect);
-
-    diagramState.equipment.forEach(item => {
-        const eqData = EQUIPMENT_ZONES[item.type];
-        if (!eqData) return;
-
-        const cx = item.x * scale;
-        const cy = item.y * scale;
-
-        [...eqData.zones].sort((a,b) => b.radius - a.radius).forEach(zone => {
-            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            circle.setAttribute('cx', cx.toString());
-            circle.setAttribute('cy', cy.toString());
-            circle.setAttribute('r', (zone.radius * scale).toString());
-            circle.setAttribute('class', zone.type === 'Division 1' ? 'zone-div1' : 'zone-div2');
-            g.appendChild(circle);
-        });
-
-        const icon = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        icon.setAttribute('cx', cx.toString());
-        icon.setAttribute('cy', cy.toString());
-        icon.setAttribute('r', '5');
-        icon.setAttribute('class', 'equipment-icon');
-        g.appendChild(icon);
-    });
-    
-    diagramCanvas.appendChild(g);
-
-    const legendData = [
-        { class: 'zone-div1', label: 'Class I, Division 1' },
-        { class: 'zone-div2', label: 'Class I, Division 2' },
-    ];
-    let legendY = 20;
-    legendData.forEach(item => {
-        const legendGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        rect.setAttribute('x', '15');
-        rect.setAttribute('y', legendY.toString());
-        rect.setAttribute('width', '20');
-        rect.setAttribute('height', '15');
-        rect.setAttribute('class', item.class);
-        
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', '45');
-        text.setAttribute('y', (legendY + 12).toString());
-        text.setAttribute('fill', 'white');
-        text.setAttribute('font-size', '12');
-        text.textContent = item.label;
-
-        legendGroup.appendChild(rect);
-        legendGroup.appendChild(text);
-        diagramCanvas.appendChild(legendGroup);
-        legendY += 25;
-    });
+function initLegend() {
+    if(!diagramLegend) return;
+    diagramLegend.innerHTML = `
+        <div class="legend-item"><span class="legend-color-box zone-division-1"></span> Class I, Division 1</div>
+        <div class="legend-item"><span class="legend-color-box zone-division-2"></span> Class I, Division 2</div>
+    `;
 }
 
 
-// --- Fugitive Emission Builder Logic ---
-function populateFugitiveSourceTypes() {
-    const selectedSetKey = fugitiveFactorSetSelect.value;
-    const factors = FUGITIVE_EMISSION_FACTOR_SETS[selectedSetKey].factors;
-
-    fugitiveSourceTypeSelect.innerHTML = ''; // Clear existing options
-    Object.keys(factors).forEach(key => {
-        const option = document.createElement('option');
-        option.value = key;
-        option.textContent = factors[key].label;
-        fugitiveSourceTypeSelect.appendChild(option);
-    });
-}
-
-function initFugitiveEmissionBuilder() {
-    // Populate factor set dropdown
-    Object.keys(FUGITIVE_EMISSION_FACTOR_SETS).forEach(key => {
-        const option = document.createElement('option');
-        option.value = key;
-        option.textContent = FUGITIVE_EMISSION_FACTOR_SETS[key].name;
-        fugitiveFactorSetSelect.appendChild(option);
-    });
-    
-    // Add event listener to factor set dropdown
-    fugitiveFactorSetSelect.addEventListener('change', () => {
-        // Clear existing sources when set is changed to avoid mismatches
-        fugitiveSources = [];
-        populateFugitiveSourceTypes();
-        renderFugitiveSourcesList();
-    });
-
-    // Initial population of component types based on default selection
-    populateFugitiveSourceTypes();
-    // Initial render of the (empty) list
-    renderFugitiveSourcesList();
-}
-
-function renderFugitiveSourcesList() {
-    const selectedSetKey = fugitiveFactorSetSelect.value;
-    const factors = FUGITIVE_EMISSION_FACTOR_SETS[selectedSetKey].factors;
-    
-    fugitiveSourcesList.innerHTML = '';
-    if (fugitiveSources.length === 0) {
-        fugitiveSourcesList.innerHTML = `<p class="info-note" style="text-align: left;">No fugitive emission sources added yet.</p>`;
-    } else {
-        fugitiveSources.forEach((source, index) => {
-            const item = document.createElement('div');
-            item.className = 'fugitive-source-item';
-            
-            const label = factors[source.type].label;
-            const totalRate = (factors[source.type].rateCFM * source.quantity).toFixed(5);
-
-            item.innerHTML = `
-                <span><strong>${source.quantity}x</strong> ${label}</span>
-                <span>${totalRate} CFM</span>
-                <button class="remove-source-btn" data-index="${index}">×</button>
-            `;
-            fugitiveSourcesList.appendChild(item);
-        });
+// --- App Initialization ---
+document.addEventListener('DOMContentLoaded', () => {
+    // Set default date
+    if (dateInput) {
+        dateInput.value = new Date().toISOString().split('T')[0];
     }
-    
-    // Add event listeners to remove buttons
-    document.querySelectorAll('.remove-source-btn').forEach(button => {
-        button.addEventListener('click', (e) => {
-            const indexToRemove = parseInt((e.target as HTMLElement).dataset.index || '-1', 10);
-            if (indexToRemove > -1) {
-                fugitiveSources.splice(indexToRemove, 1);
-                renderFugitiveSourcesList();
-            }
-        });
-    });
-
-    updateTotalLeakRate();
-}
-
-function updateTotalLeakRate() {
-    const selectedSetKey = fugitiveFactorSetSelect.value;
-    const factors = FUGITIVE_EMISSION_FACTOR_SETS[selectedSetKey].factors;
-
-    const total = fugitiveSources.reduce((acc, src) => {
-        // Ensure the source type exists in the current factor set before calculating
-        if (factors[src.type]) {
-            return acc + (factors[src.type].rateCFM * src.quantity);
-        }
-        return acc;
-    }, 0);
-    totalLeakRateValue.textContent = `${total.toFixed(5)} CFM`;
-}
-
-
-// --- Initialization ---
-initDiagramGenerator();
-initFugitiveEmissionBuilder();
-// Set today's date in the date input field
-dateInput.value = new Date().toISOString().substring(0, 10);
+    initDiagramGenerator();
+    initLegend();
+});
