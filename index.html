@@ -1,0 +1,632 @@
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Ventilation Calculator for Electrical Area Classification</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="index.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/genai": "https://esm.sh/@google/genai@^0.7.0",
+          "marked": "https://esm.sh/marked@^12.0.0",
+          "jspdf": "https://esm.sh/jspdf@^2.5.1",
+          "jspdf-autotable": "https://esm.sh/jspdf-autotable@^3.8.2"
+        }
+      }
+    </script>
+  <link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <main>
+      <header>
+        <h1>Ventilation Calculator</h1>
+        <p>
+          For Electrical Area Classification based on AGA XL1001 &amp; API RP 500
+          guidelines. By Tim Bickford Rev 1
+        </p>
+      </header>
+
+      <nav class="tabs">
+        <button id="calculator-tab" class="tab-btn active-tab" aria-selected="true">Calculator</button>
+        <button id="theory-tab" class="tab-btn" aria-selected="false">Theory</button>
+        <button id="results-summary-tab" class="tab-btn hidden" aria-selected="false">Results</button>
+        <button id="diagram-tab" class="tab-btn hidden" aria-selected="false">Hazardous Area Diagram</button>
+        <button id="admin-tab" class="tab-btn" aria-selected="false">Admin</button>
+        <button id="report-tab" class="tab-btn hidden" aria-selected="false">Report</button>
+      </nav>
+
+      <div id="calculator-content">
+        <form id="calc-form" aria-labelledby="form-title">
+          
+          <fieldset class="form-section">
+            <legend>Project Information</legend>
+            <div class="input-grid">
+              <div class="input-group full-width-item">
+                  <label for="project-name">
+                    Project Name
+                    <span class="tooltip-container">
+                      <span class="tooltip-icon">?</span>
+                      <span class="tooltip-text">A unique name for the project for easy identification in saved files and reports.</span>
+                    </span>
+                  </label>
+                  <input type="text" id="project-name" name="project-name" placeholder="e.g., Compressor Station Upgrade" required value="Juniper Ridge District regulating station">
+              </div>
+              <div class="input-group">
+                  <label for="location">
+                    Location
+                    <span class="tooltip-container">
+                      <span class="tooltip-icon">?</span>
+                      <span class="tooltip-text">The geographical location of the project (e.g., city, state).</span>
+                    </span>
+                  </label>
+                  <input type="text" id="location" name="location" placeholder="e.g., Midland, TX" required value="Montgomery Texas">
+              </div>
+              <div class="input-group">
+                  <label for="company">
+                    Company
+                    <span class="tooltip-container">
+                      <span class="tooltip-icon">?</span>
+                      <span class="tooltip-text">The name of the company responsible for the project.</span>
+                    </span>
+                  </label>
+                  <input type="text" id="company" name="company" placeholder="e.g., ACME Energy" required value="unitil">
+              </div>
+              <div class="input-group">
+                  <label for="date">
+                    Date
+                    <span class="tooltip-container">
+                      <span class="tooltip-icon">?</span>
+                      <span class="tooltip-text">The date the calculation is performed. Defaults to today.</span>
+                    </span>
+                  </label>
+                  <input type="date" id="date" name="date" required>
+              </div>
+              <div class="input-group">
+                  <label for="performed-by">
+                    Performed By
+                    <span class="tooltip-container">
+                      <span class="tooltip-icon">?</span>
+                      <span class="tooltip-text">The name of the person performing the calculation.</span>
+                    </span>
+                  </label>
+                  <input type="text" id="performed-by" name="performed-by" placeholder="e.g., J. Doe" required value="Tim Bickford🎸">
+              </div>
+            </div>
+          </fieldset>
+          
+          <fieldset class="form-section">
+            <legend id="form-title">Building &amp; Environmental Data</legend>
+            
+            <div class="mode-selector">
+              <div class="radio-group">
+                <input type="radio" id="design-mode-radio" name="calculation-mode-select" value="design" checked>
+                <label for="design-mode-radio">Design Mode (Calculate Required Vent Area)</label>
+              </div>
+              <div class="radio-group">
+                <input type="radio" id="verification-mode-radio" name="calculation-mode-select" value="verification">
+                <label for="verification-mode-radio">Verification Mode (Check Existing Vent Area)</label>
+              </div>
+            </div>
+
+            <div class="input-grid">
+              <div class="input-group full-width-item">
+                <label for="calculation-goal">
+                  Calculation Goal
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">The primary objective of the ventilation calculation, which often relates to electrical safety standards.</span>
+                  </span>
+                </label>
+                <select id="calculation-goal" name="calculation-goal" required>
+                  <option value="reclassify-d1-to-d2">Reclassify from Class 1 Div 1 to Div 2</option>
+                  <option value="design-new-d2" selected>Design for New Class 1 Div 2 Area</option>
+                  <option value="reclassify-d2-to-non-classified">Reclassify Class 1 Div 2 to Non-Classified Area</option>
+                </select>
+              </div>
+               <div class="input-group full-width-item">
+                <label for="gas-type">
+                  Gas Type
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">Crucial for vent placement. Lighter-than-air gases (methane) rise, requiring low inlets and high outlets. Heavier-than-air gases (propane) sink, requiring high inlets and low outlets.</span>
+                  </span>
+                </label>
+                <select id="gas-type" name="gas-type" required>
+                  <option value="lighter-than-air" selected>Lighter-than-air (e.g., Natural Gas)</option>
+                  <option value="heavier-than-air">Heavier-than-air (e.g., Propane)</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label for="length">
+                  Building Length (ft)
+                   <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">The internal length of the building or enclosure in feet.</span>
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  id="length"
+                  name="length"
+                  required
+                  min="0"
+                  step="any"
+                  value="20"
+                />
+              </div>
+              <div class="input-group">
+                <label for="width">
+                  Building Width (ft)
+                   <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">The internal width of the building or enclosure in feet.</span>
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  id="width"
+                  name="width"
+                  required
+                  min="0"
+                  step="any"
+                  value="9.4167"
+                />
+              </div>
+              <div class="input-group">
+                <label for="height">
+                  Vertical Vent Separation (ft)
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">The vertical distance between the center of the lower inlet vents and the center of the upper outlet vents. This is NOT the overall building height.</span>
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  id="height"
+                  name="height"
+                  required
+                  min="0"
+                  step="any"
+                  value="7.67"
+                />
+              </div>
+              <div class="input-group">
+                <label for="inside-temp">
+                  Inside Temperature (°F)
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">Worst-case for ventilation is the smallest temperature difference (approaching 0°F), as this minimizes the 'Stack Effect' driving force.</span>
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  id="inside-temp"
+                  name="inside-temp"
+                  required
+                  step="any"
+                  value="68"
+                />
+              </div>
+              <div class="input-group">
+                <label for="outside-temp">
+                  Outside Temperature (°F)
+                   <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">Worst-case for ventilation is the smallest temperature difference (approaching 0°F), as this minimizes the 'Stack Effect' driving force.</span>
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  id="outside-temp"
+                  name="outside-temp"
+                  required
+                  step="any"
+                  value="50"
+                />
+              </div>
+              <div class="input-group">
+                <label for="wind-velocity">
+                  Average Wind Velocity (mph)
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">A conservative, year-round average wind speed for the location. Low wind speeds represent a worst-case scenario for wind-driven ventilation.</span>
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  id="wind-velocity"
+                  name="wind-velocity"
+                  required
+                  min="0"
+                  step="any"
+                  value="7"
+                />
+              </div>
+
+              <div class="input-group">
+                <label for="building-orientation">
+                  Building Orientation (sets Cv)
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">The orientation of the building's vents relative to the prevailing wind direction. 'Perpendicular' offers the most effective wind-driven flow, while 'Parallel' offers the least.</span>
+                  </span>
+                </label>
+                <select id="building-orientation" name="building-orientation">
+                  <option value="0.6" selected>Perpendicular (Cv=0.6) - Most Effective</option>
+                  <option value="0.425">Angled (Cv=0.425) - Moderately Effective</option>
+                  <option value="0.25">Parallel (Cv=0.25) - Least Effective</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label for="surrounding-terrain">
+                  Surrounding Terrain
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">The local environment affects wind speed at the building's height. Open terrain has the highest wind exposure, while urban areas have the lowest.</span>
+                  </span>
+                </label>
+                <select id="surrounding-terrain" name="surrounding-terrain">
+                  <option value="1.0" selected>Open Terrain (Flat, open country)</option>
+                  <option value="0.85">Suburban / Wooded (Residential areas)</option>
+                  <option value="0.67">Urban / Industrial (City centers)</option>
+                </select>
+              </div>
+              <div class="input-group">
+                <label for="vent-opening-type">
+                  Vent Opening Type (K)
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">The physical shape of the vent opening, which affects airflow efficiency. A sharp-edged orifice is a common and conservative choice.</span>
+                  </span>
+                </label>
+                <select id="vent-opening-type" name="vent-opening-type">
+                  <option value="0.65" selected>Sharp-Edged Orifice (Typical, K=0.65)</option>
+                  <option value="0.98">Well-Rounded Inlet (Efficient, K=0.98)</option>
+                  <option value="0.50">Re-entrant (Inefficient, K=0.50)</option>
+                </select>
+              </div>
+
+               <div class="input-group" id="inlet-obstruction-group">
+                <label for="inlet-obstruction">
+                  Inlet Vent Obstruction
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">Accounts for airflow reduction from items like screens or louvers on the inlet vent. This value represents the percentage of the area that is open (e.g., 55% Free Area means 45% is blocked).</span>
+                  </span>
+                </label>
+                <select id="inlet-obstruction" name="inlet-obstruction">
+                  <option value="1.0">None (Unobstructed)</option>
+                  <option value="0.92">Bird Screen (92% Free Area)</option>
+                  <option value="0.85">Insect Screen (85% Free Area)</option>
+                  <option value="0.75">Weather Hood (75% Free Area)</option>
+                  <option value="0.55" selected>Standard Louver (55% Free Area)</option>
+                  <option value="0.35">Acoustic Louver (35% Free Area)</option>
+                </select>
+              </div>
+              <div class="input-group" id="outlet-obstruction-group">
+                <label for="outlet-obstruction">
+                  Outlet Vent Obstruction
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">Accounts for airflow reduction from items like screens or louvers on the outlet vent. This value represents the percentage of the area that is open (e.g., 55% Free Area means 45% is blocked).</span>
+                  </span>
+                </label>
+                <select id="outlet-obstruction" name="outlet-obstruction">
+                  <option value="1.0">None (Unobstructed)</option>
+                  <option value="0.92">Bird Screen (92% Free Area)</option>
+                  <option value="0.85">Insect Screen (85% Free Area)</option>
+                  <option value="0.75">Weather Hood (75% Free Area)</option>
+                  <option value="0.55" selected>Standard Louver (55% Free Area)</option>
+                  <option value="0.35">Acoustic Louver (35% Free Area)</option>
+                </select>
+              </div>
+
+              <div class="input-group full-width-item">
+                <label for="calculation-method">
+                  Calculation Method
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">Choose the standard for calculating the required ventilation rate. 'Area Method' is a general approach, while 'Fugitive Emission Method' is for quantifiable leak sources.</span>
+                  </span>
+                </label>
+                <select id="calculation-method" name="calculation-method" required>
+                  <option value="area-method" selected>
+                    Area Method (AGA XL1001)
+                  </option>
+                  <option value="fugitive-emission-method">
+                    Fugitive Emission Method (API RP 500)
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            <div id="existing-vent-data" class="hidden">
+              <h3 class="subsection-title">Existing Vent Data</h3>
+              <div class="input-grid">
+                <div class="input-group">
+                  <label for="existing-inlet-area">Existing Inlet Gross Area (ft²)</label>
+                  <input type="number" id="existing-inlet-area" name="existing-inlet-area" min="0" step="any" placeholder="e.g., 25">
+                </div>
+                <div class="input-group">
+                  <label for="existing-outlet-area">Existing Outlet Gross Area (ft²)</label>
+                  <input type="number" id="existing-outlet-area" name="existing-outlet-area" min="0" step="any" placeholder="e.g., 25">
+                </div>
+              </div>
+            </div>
+
+            <div id="fugitive-emission-inputs-wrapper" class="hidden">
+              <h3 class="subsection-title">Fugitive Emission Source Builder</h3>
+              <div class="input-group full-width-item">
+                <label for="fugitive-factor-set">
+                  Emission Factor Set
+                  <span class="tooltip-container">
+                    <span class="tooltip-icon">?</span>
+                    <span class="tooltip-text">Select the industry standard for component leak rates. "Oil and Gas Production" is a common standard. "SOCMI" (Synthetic Organic Chemical Manufacturing Industry) provides alternative factors that may be more appropriate for chemical processing facilities.</span>
+                  </span>
+                </label>
+                <select id="fugitive-factor-set" name="fugitive-factor-set">
+                  <!-- Options will be populated by JS. Oil & Gas will be default. -->
+                </select>
+              </div>
+              <div class="source-builder-grid">
+                  <div class="input-group">
+                      <label for="fugitive-source-type">Component Type</label>
+                      <select id="fugitive-source-type">
+                          <!-- Options populated by JS -->
+                      </select>
+                  </div>
+                  <div class="input-group">
+                      <label for="fugitive-source-qty">Quantity</label>
+                      <input type="number" id="fugitive-source-qty" value="1" min="1" step="1">
+                  </div>
+                  <button type="button" id="add-fugitive-source-btn" class="add-btn">+</button>
+              </div>
+
+              <div id="fugitive-sources-list">
+                  <!-- Added components will appear here -->
+              </div>
+              
+              <div id="total-leak-rate-display" class="total-leak-rate-container">
+                  <label>Total Calculated Leak Rate (Q_leak)</label>
+                  <div id="total-leak-rate-value">0.00 CFM</div>
+              </div>
+
+              <div class="input-grid">
+                <div class="input-group">
+                  <label for="lfl">
+                    Gas LFL (%)
+                    <span class="tooltip-container">
+                      <span class="tooltip-icon">?</span>
+                      <span class="tooltip-text">The Lower Flammable Limit of the potential gas leak, expressed as a percentage. This is the minimum concentration of the gas in air that can ignite.</span>
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    id="lfl"
+                    name="lfl"
+                    placeholder="e.g., 5"
+                    min="0.1"
+                    step="any"
+                    value="5"
+                  />
+                </div>
+                <div class="input-group">
+                  <label for="safety-factor">
+                    Safety Factor (C)
+                    <span class="tooltip-container">
+                      <span class="tooltip-icon">?</span>
+                      <span class="tooltip-text">A safety multiplier (typically 0.25 for 25% LFL) used to ensure the calculated ventilation rate keeps the gas concentration well below the flammable limit.</span>
+                    </span>
+                  </label>
+                  <input
+                    type="number"
+                    id="safety-factor"
+                    name="safety-factor"
+                    placeholder="e.g., 0.25"
+                    min="0.01"
+                    max="1"
+                    step="any"
+                    value="0.25"
+                  />
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="form-actions">
+            <button type="button" id="load-calc-btn" class="secondary-btn">Load Calculation from File</button>
+            <input type="file" id="load-file-input" class="hidden" accept=".json,application/json">
+            <button type="submit" id="calculate-btn">
+              Calculate Required Ventilation
+            </button>
+          </div>
+        </form>
+
+        <section id="results-container" aria-live="polite">
+          <div id="results-placeholder">
+            Enter your building's data above to calculate the required vent area.
+          </div>
+          <div id="loading-indicator" class="hidden">
+            <div class="spinner"></div>
+            <p>Calculating...</p>
+          </div>
+          <div id="error-message" class="hidden"></div>
+          <div id="results-content">
+             <!-- Results will be dynamically inserted here -->
+          </div>
+        </section>
+
+      </div>
+      
+      <div id="theory-content" class="hidden content-panel">
+          <h2>Ventilation Calculation Methodologies</h2>
+          <p>This section details the two primary methodologies available in the calculator for determining ventilation requirements. Each method is suited for different scenarios and is based on established industry standards.</p>
+      
+          <hr style="margin: 2rem 0; border-color: var(--border-color);">
+      
+          <h3>Method 1: Area Method (AGA Report No. XL1001)</h3>
+          <p>The Area Method, as outlined in the American Gas Association's report "Classification of Locations for Electrical Installations in Gas Utility Areas" (XL1001), provides a conservative, rule-of-thumb approach for determining ventilation requirements. It is best suited for general-purpose buildings where specific sources of gas release are not defined or quantified.</p>
+          <p>The core principle is to ensure a baseline level of air quality and safety by requiring a sufficient rate of air exchange to dilute any minor, unforeseen fugitive emissions, preventing the formation of a hazardous atmosphere.</p>
+          
+          <h4>1.1 Source Documentation and Formula Basis</h4>
+          <ul>
+              <li><strong>Source Document:</strong> AGA Report No. XL1001, Appendix B, "Ventilation Calculations".</li>
+              <li><strong>Principle:</strong> The required ventilation rate (Qv) is determined as the <strong>greater</strong> of two distinct calculations: one based on the building's total volume (ensuring air changes) and one based on its floor area.</li>
+          </ul>
+      
+          <h4>1.2 Criterion 1: Air Changes per Hour (ACH)</h4>
+          <p>This criterion ensures that the entire volume of air within the building is refreshed at a regular interval. The standard specifies a complete air change in <strong>less than 5 minutes</strong>.</p>
+          <div class="equation">Q<sub>v,ACH</sub> = Building Volume (ft³) / 5 minutes</div>
+      
+          <h4>1.3 Criterion 2: Rate per Floor Area</h4>
+          <p>This criterion establishes a minimum airflow based on the building's footprint. AGA XL1001 references a base rate of 1.0 CFM/ft² from other standards and applies a <strong>safety factor of 1.5</strong>.</p>
+          <div class="equation">Q<sub>v,Floor</sub> = Floor Area (ft²) &times; 1.5 CFM/ft²</div>
+      
+          <h4>1.4 Final Required Ventilation Rate (Qv)</h4>
+          <p>The controlling requirement is the larger of the two values calculated above, ensuring the more conservative condition is met.</p>
+          <div class="equation">Q<sub>v</sub> = max(Q<sub>v,ACH</sub>, Q<sub>v,Floor</sub>)</div>
+
+          <h4>1.5 Rationale for Not Using Specific Leakage Rates</h4>
+          <p>A key distinction of the AGA XL1001 Area Method is that it does not rely on counting individual components or using predetermined equipment leakage rates. The rationale for this approach is rooted in its intended application and conservative safety philosophy:</p>
+          <ul>
+              <li><strong>General Applicability:</strong> The method is designed for a wide range of gas utility areas (e.g., regulator stations, meter houses) where a detailed inventory of every potential small leak source (like valve packing, gaskets, or threaded fittings) is often impractical or changes over time.</li>
+              <li><strong>Conservative Design Philosophy:</strong> Rather than quantifying known leaks, the Area Method presumes that minor, unforeseen, or intermittent fugitive emissions are possible. It provides a robust, prescriptive ventilation rate sufficient to dilute these potential emissions, ensuring the area does not become hazardous without requiring a complex component-by-component analysis.</li>
+              <li><strong>Simplicity and Standardization:</strong> By basing the calculation on simple, stable building dimensions (volume and floor area), the method provides a standardized and easily verifiable baseline for safety across many similar facilities. This "macro" approach contrasts with the "micro" (component-level) analysis of the Fugitive Emission Method, which is better suited for process areas where significant, quantifiable leak sources are the primary concern.</li>
+          </ul>
+          
+          <hr style="margin: 2rem 0; border-color: var(--border-color);">
+      
+          <h3>Method 2: Fugitive Emission Method (API RP 500)</h3>
+          <p>The Fugitive Emission Method, based on guidelines from API Recommended Practice 500, is a targeted approach used when potential leak sources can be identified and quantified. This method calculates the precise ventilation rate required to dilute a substance from a known potential leak to a concentration well below its Lower Flammable Limit (LFL). It offers two sub-approaches for estimating the leak rate.</p>
+      
+          <h4>2.1 Average Emission Factor Approach</h4>
+          <p>This approach calculates expected leak rates using fleet-wide average emission factors. It is best suited for emission inventories, regulatory reporting, and baseline engineering design where an average performance across many components is considered.</p>
+          
+          <h5>Source Documentation and Formula</h5>
+          <ul>
+              <li><strong>Equation Source:</strong> API Recommended Practice 500 (API RP 500), Appendix B.1</li>
+              <li><strong>Emission Data Source:</strong> U.S. EPA, "Protocol for Equipment Leak Emission Estimates" (EPA-453/R-95-017), Table 2-4.</li>
+              <li><strong>Governing Formula:</strong>
+                  <div class="equation">G = (E &times; V) / (60 &times; mw)</div>
+              </li>
+          </ul>
+      
+          <h5>Variable Definitions</h5>
+          <table class="data-table">
+              <thead><tr><th>Variable</th><th>Value</th><th>Source and Rationale</th></tr></thead>
+              <tbody>
+                  <tr><td>G</td><td>Varies</td><td>The final calculated leak rate in cubic feet per minute (cfm).</td></tr>
+                  <tr><td>E</td><td>Varies</td><td>The mass emission rate in lb/hr, converted from the kg/hr values in EPA Table 2-4.</td></tr>
+                  <tr><td>V</td><td>379.8 ft³/lb-mol</td><td>The molar volume of an ideal gas at base conditions of 14.7 psia and 60°F.</td></tr>
+                  <tr><td>mw</td><td>16.04 lb/lb-mol</td><td>The molecular weight for methane-dominant natural gas.</td></tr>
+                  <tr><td>60</td><td>60 min/hr</td><td>A constant to convert hours to minutes.</td></tr>
+              </tbody>
+          </table>
+      
+          <h5>Final Table: Average Natural Gas Equipment Leak Rates</h5>
+          <p>The following values are used in the calculator when the "Average Emission Factors" set is selected.</p>
+          <table class="data-table">
+              <thead><tr><th>Equipment Type</th><th>Emission Factor (kg/hr/source)</th><th>Calculated Leak Rate (cfm/source)</th></tr></thead>
+              <tbody>
+                  <tr><td>Valves</td><td>4.5 &times; 10<sup>-3</sup></td><td><strong>0.00392</strong></td></tr>
+                  <tr><td>Connectors</td><td>2.0 &times; 10<sup>-4</sup></td><td><strong>0.00017</strong></td></tr>
+                  <tr><td>Flanges</td><td>3.9 &times; 10<sup>-4</sup></td><td><strong>0.00034</strong></td></tr>
+              </tbody>
+          </table>
+      
+          <h4>2.2 Pegged (Maximum) Emission Rate Approach</h4>
+          <p>This approach calculates the leak rate from a component known to be leaking significantly (e.g., saturating a gas detector). It is essential for safety-critical applications like ventilation design for worst-case scenarios.</p>
+      
+          <h5>Source Documentation and Formula</h5>
+          <ul>
+              <li><strong>Equation Source:</strong> Derived from Ideal Gas Law principles, consistent with API RP 500.</li>
+              <li><strong>Emission Data Source:</strong> Published pegged emission rates for gas service components.</li>
+              <li><strong>Governing Formula:</strong>
+                  <div class="equation">Q<sub>scfm</sub> = E<sub>TOC</sub> &times; CF</div>
+              </li>
+          </ul>
+      
+          <h5>Variable Definitions</h5>
+          <table class="data-table">
+              <thead><tr><th>Variable</th><th>Value</th><th>Source and Rationale</th></tr></thead>
+              <tbody>
+                  <tr><td>Q<sub>scfm</sub></td><td>Varies</td><td>The final calculated leak rate in standard cubic feet per minute (scfm).</td></tr>
+                  <tr><td>E<sub>TOC</sub></td><td>Varies</td><td>The pegged mass emission rate in kg/hr for a component with a saturated leak reading.</td></tr>
+                  <tr><td>CF</td><td>0.801</td><td>The overall Conversion Factor derived from gas properties and unit conversions to yield cfm from kg/hr.</td></tr>
+              </tbody>
+          </table>
+      
+          <h5>Final Table: Pegged Natural Gas Equipment Leak Rates</h5>
+          <p>The following values are used in the calculator when the "Pegged (Maximum) Rates" set is selected.</p>
+          <table class="data-table">
+              <thead><tr><th>Equipment Type</th><th>Mass Emission Rate (E<sub>TOC</sub>) [kg/hr]</th><th>Calculated Leak Rate (Q<sub>scfm</sub>)</th></tr></thead>
+              <tbody>
+                  <tr><td>Valves/All</td><td>0.140</td><td><strong>0.112</strong></td></tr>
+                  <tr><td>Flanges/All</td><td>0.084</td><td><strong>0.067</strong></td></tr>
+                  <tr><td>Threaded Connections/All</td><td>0.030</td><td><strong>0.024</strong></td></tr>
+              </tbody>
+          </table>
+      </div>
+
+      <div id="results-summary-content" class="hidden content-panel">
+        <!-- Detailed results report will be dynamically inserted here -->
+      </div>
+
+      <div id="diagram-content" class="hidden">
+        <div class="info-note" style="text-align: left; padding: 1rem; margin-bottom: 1rem;">
+          Drag equipment from the palette on the left onto the building floor plan. The diagram uses a top-down view. Distances are to scale.
+        </div>
+        <div class="diagram-layout">
+            <div id="diagram-palette" class="diagram-palette">
+                <h4>Equipment Palette</h4>
+                <!-- Items populated by JS -->
+            </div>
+            <div class="canvas-wrapper">
+                <svg id="diagram-canvas"></svg>
+            </div>
+        </div>
+        <div class="diagram-actions">
+            <button id="clear-diagram-btn" class="secondary-btn">Clear Diagram</button>
+        </div>
+      </div>
+
+      <div id="admin-login-content" class="hidden">
+        <form id="admin-login-form" class="content-panel">
+            <h2>Admin Login</h2>
+            <div class="input-group">
+                <label for="admin-password">Password</label>
+                <input type="password" id="admin-password" name="admin-password" required>
+            </div>
+            <div id="login-error-message" class="hidden"></div>
+            <button type="submit" id="login-btn">Login</button>
+        </form>
+      </div>
+
+      <div id="admin-panel-content" class="hidden">
+         <section class="content-panel">
+            <h2>Admin Panel</h2>
+            <p>Admin features will be added here.</p>
+            <div class="admin-actions">
+                <button id="logout-btn" class="secondary-btn">Logout</button>
+            </div>
+        </section>
+      </div>
+
+      <div id="report-content" class="hidden">
+        <section class="content-panel">
+           <h2>Report Generation</h2>
+           <p>You can download a PDF report or copy the LaTeX code for use in an external editor like Overleaf.</p>
+           <div class="report-actions">
+                <button id="download-pdf-btn">Download PDF</button>
+                <button id="copy-latex-btn">Copy LaTeX Code</button>
+           </div>
+           <pre><code id="latex-code-output">No report has been generated yet.</code></pre>
+       </section>
+     </div>
+
+    </main>
+    <script type="module" src="index.tsx"></script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
