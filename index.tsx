@@ -1656,7 +1656,7 @@ The Fugitive Emission Method, based on guidelines from API Recommended Practice 
 \\subsection*{Data Sources}
 The component emission factors and conversion methodology are sourced from the following industry-standard documents:
 \\begin{itemize}
-    \\item \\textbf{Emission Factor Data:} U.S. Environmental Protection Agency (EPA) \\`\\`Protocol for Equipment Leak Emission Estimates'' -- EPA-453/R-95-017, November 1995, Table 2-4.
+    \\item \\textbf{Emission Factor Data:} U.S. Environmental Protection Agency (EPA) \u0060\u0060Protocol for Equipment Leak Emission Estimates'' -- EPA-453/R-95-017, November 1995, Table 2-4.
     \\item \\textbf{Conversion Methodology:} API Recommended Practice 500 (API RP 500), 2014 Edition, Appendix B.1 -- Gas Leakage and Ventilation Calculations.
 \\end{itemize}
         `;
