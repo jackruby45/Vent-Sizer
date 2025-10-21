@@ -7,10 +7,7 @@
     <link rel="stylesheet" href="index.css" />
     <script type="importmap">
       {
-        "imports": {
-          "jspdf": "https://esm.sh/jspdf@^2.5.1",
-          "jspdf-autotable": "https://esm.sh/jspdf-autotable@^3.8.2"
-        }
+        "imports": {}
       }
     </script>
   <link rel="stylesheet" href="/index.css">
@@ -18,11 +15,20 @@
   <body>
     <main>
       <header>
-        <h1>Ventilation Calculator</h1>
-        <p>
-          For Electrical Area Classification based on AGA XL1001 &amp; API RP 500
-          guidelines. By Tim Bickford Rev 1
-        </p>
+        <div class="header-main">
+          <h1>Ventilation Calculator</h1>
+          <button id="toggle-header-btn" aria-expanded="true" aria-controls="collapsible-header" title="Toggle Header">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+              <path fill="currentColor" d="M7.41 15.41 12 10.83l4.59 4.58L18 14l-6-6-6 6 1.41 1.41z"/>
+            </svg>
+          </button>
+        </div>
+        <div id="collapsible-header">
+          <p>
+            For Electrical Area Classification based on AGA XL1001 &amp; API RP 500
+            guidelines. By Tim Bickford Rev 2
+          </p>
+        </div>
       </header>
 
       <nav class="tabs">
@@ -117,7 +123,6 @@
                   </span>
                 </label>
                 <select id="calculation-goal" name="calculation-goal" required>
-                  <option value="design-new-d1">Design for New Class 1 Div 1 Area</option>
                   <option value="reclassify-d1-to-d2">Reclassify from Class 1 Div 1 to Div 2</option>
                   <option value="design-new-d2" selected>Design for New Class 1 Div 2 Area</option>
                   <option value="reclassify-d2-to-non-classified">Reclassify Class 1 Div 2 to Non-Classified Area</option>
@@ -644,9 +649,8 @@
       <div id="report-content" class="hidden">
         <section class="content-panel">
            <h2>Report Generation</h2>
-           <p>You can download a professional PDF report or copy the LaTeX code for use in an external editor like Overleaf.</p>
+           <p>You can copy the LaTeX code for use in an external editor like Overleaf.</p>
            <div class="report-actions">
-                <button id="download-pdf-btn">Download PDF Report</button>
                 <button id="copy-latex-btn">Copy LaTeX Code</button>
                 <a href="https://www.overleaf.com/" target="_blank" rel="noopener noreferrer" class="overleaf-link">Paste Code into Overleaf</a>
            </div>

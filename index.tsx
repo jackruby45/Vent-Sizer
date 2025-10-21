@@ -20,6 +20,8 @@ const adminPanelContent = document.getElementById("admin-panel-content") as HTML
 const reportContent = document.getElementById("report-content") as HTMLDivElement;
 const resultsSummaryContent = document.getElementById("results-summary-content") as HTMLDivElement;
 const diagramContent = document.getElementById("diagram-content") as HTMLDivElement;
+const toggleHeaderBtn = document.getElementById('toggle-header-btn') as HTMLButtonElement;
+const collapsibleHeader = document.getElementById('collapsible-header') as HTMLDivElement;
 
 
 // Navigation Tabs
@@ -105,18 +107,6 @@ const EQUIPMENT_ZONES: { [key: string]: { label: string; zones: { type: 'Divisio
     },
     'pressure-vessel-flange': {
         label: 'Pressure Vessel Flange (AGA Fig 8)',
-        zones: [
-            { type: 'Division 2', shape: 'circle', radius: 15 },
-        ]
-    },
-    'generic-div1': {
-        label: 'Generic Class I, Div 1 Source',
-        zones: [
-            { type: 'Division 1', shape: 'circle', radius: 5 },
-        ]
-    },
-    'generic-div2': {
-        label: 'Generic Class I, Div 2 Source',
         zones: [
             { type: 'Division 2', shape: 'circle', radius: 15 },
         ]
@@ -209,71 +199,15 @@ function escapeLatex(str: string): string {
         .replace(/\^/g, '\\textasciicircum{}');
 }
 
-// --- Fugitive Emission UI ---
-// Fix: Implement `populateFugitiveSourceTypes` to fill the source type dropdown.
-function populateFugitiveSourceTypes(): void {
-    const factorSetKey = fugitiveFactorSetSelect.value;
-    const factors = FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey]?.factors;
-    fugitiveSourceTypeSelect.innerHTML = ''; // Clear existing options
-
-    if (factors) {
-        Object.entries(factors).forEach(([key, value]) => {
-            const option = document.createElement('option');
-            option.value = key;
-            option.textContent = value.label;
-            fugitiveSourceTypeSelect.appendChild(option);
-        });
-    }
-}
-
-// Fix: Implement `updateTotalLeakRate` helper.
-function updateTotalLeakRate(): void {
-    const factorSetKey = fugitiveFactorSetSelect.value;
-    const factors = FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey]?.factors;
-    if (!factors) {
-        totalLeakRateValue.textContent = '0.0000';
-        return;
-    }
-    const totalRate = fugitiveSources.reduce((total, src) => {
-        const rate = factors[src.type]?.rateCFM || 0;
-        return total + (rate * src.quantity);
-    }, 0);
-    totalLeakRateValue.textContent = totalRate.toFixed(4);
-}
-
-// Fix: Implement `renderFugitiveSourcesList` to display and manage the list of fugitive sources.
-function renderFugitiveSourcesList(): void {
-    fugitiveSourcesList.innerHTML = '';
-    const factorSetKey = fugitiveFactorSetSelect.value;
-    const factors = FUGITIVE_EMISSION_FACTOR_SETS[factorSetKey]?.factors;
-
-    if (fugitiveSources.length === 0) {
-        fugitiveSourcesList.innerHTML = '<p>No fugitive sources added yet.</p>';
-    } else {
-        fugitiveSources.forEach((source, index) => {
-            const factorInfo = factors ? factors[source.type] : null;
-            const label = factorInfo ? factorInfo.label : `Unknown Type: ${source.type}`;
-            
-            const item = document.createElement('div');
-            item.className = 'fugitive-source-item';
-            item.innerHTML = `
-                <span>${label}: ${source.quantity}</span>
-                <button type="button" class="remove-btn" data-index="${index}" title="Remove source">&times;</button>
-            `;
-            item.querySelector('.remove-btn')?.addEventListener('click', () => {
-                fugitiveSources.splice(index, 1);
-                renderFugitiveSourcesList();
-            });
-            fugitiveSourcesList.appendChild(item);
-        });
-    }
-    updateTotalLeakRate();
-}
-
-// Initial population of fugitive source types
-populateFugitiveSourceTypes();
-
 // --- Event Listeners ---
+
+if (toggleHeaderBtn && collapsibleHeader) {
+    toggleHeaderBtn.addEventListener('click', () => {
+        const isExpanded = toggleHeaderBtn.getAttribute('aria-expanded') === 'true';
+        collapsibleHeader.classList.toggle('collapsed');
+        toggleHeaderBtn.setAttribute('aria-expanded', String(!isExpanded));
+    });
+}
 
 function handleTabClick(tab: HTMLButtonElement, content: HTMLDivElement): void {
   deactivateAllTabs();
@@ -398,16 +332,9 @@ addFugitiveSourceBtn.addEventListener('click', () => {
         } else {
             fugitiveSources.push({ type, quantity });
         }
-        // Fix: Call the implemented `renderFugitiveSourcesList` function.
         renderFugitiveSourcesList();
         fugitiveSourceQtyInput.value = '1'; 
     }
-});
-
-// Fix: Add event listener for factor set changes.
-fugitiveFactorSetSelect.addEventListener('change', () => {
-    populateFugitiveSourceTypes();
-    updateTotalLeakRate();
 });
 
 const handleModeChange = () => {
@@ -435,7 +362,6 @@ async function runCalculation(loadedData: any | null = null) {
     // If loading, restore fugitive sources
     if (loadedData && loadedData.fugitiveSources) {
         fugitiveSources = loadedData.fugitiveSources;
-        // Fix: Call the implemented `renderFugitiveSourcesList` function.
         renderFugitiveSourcesList();
     }
 
@@ -1167,9 +1093,7 @@ function handleLoadCalculation(event: Event) {
             }
             
             // Manually update UI elements that depend on selections
-            // Fix: Call the implemented `populateFugitiveSourceTypes` function.
             populateFugitiveSourceTypes(); // Update component list based on now-selected factor set
-            // Fix: Call the implemented `renderFugitiveSourcesList` function.
             renderFugitiveSourcesList(); // Render the restored sources
             calculationMethodSelect.dispatchEvent(new Event('change')); // Show/hide fugitive section
             handleModeChange(); // Show/hide verification inputs
@@ -1862,6 +1786,20 @@ The following recommendations should be considered for the final design:
 ${recItems}
 \\end{itemize}
 
+\\vfill
+\\newpage
+
+\\begin{center}
+\\small
+\\textbf{Disclaimer} \\\\
+\\vspace{0.5cm}
+\\parbox{0.8\\textwidth}{
+\\centering
+This tool was created for educational purposes only. All calculations should be checked for proper theory and accuracy. The Author is not responsible or liable for this tool's use. \\\\
+\\copyright \\textasciitilde{}Tim Bickford.
+}
+\\end{center}
+
 \\end{document}
     `;
 }
@@ -1873,93 +1811,6 @@ let isDraggingEquipment = false;
 let draggedEquipmentInfo: { id: number; startX: number; startY: number; mouseStartX: number; mouseStartY: number; } | null = null;
 let lastMousePos = { x: 0, y: 0 };
 
-// Fix: Implement `updateEquipmentList` to render the list of placed equipment.
-function updateEquipmentList() {
-    equipmentList.innerHTML = '';
-    if (diagramState.equipment.length === 0) {
-        equipmentList.innerHTML = '<li>No equipment added. Drag items from the palette onto the diagram.</li>';
-        return;
-    }
-    diagramState.equipment.forEach(eq => {
-        const eqInfo = EQUIPMENT_ZONES[eq.type];
-        if (!eqInfo) return;
-
-        const listItem = document.createElement('li');
-        listItem.innerHTML = `
-            <span>${eqInfo.label} (at ${eq.x.toFixed(1)}', ${eq.y.toFixed(1)}')</span>
-            <button class="remove-equipment-btn" data-id="${eq.id}" title="Remove this item">&times;</button>
-        `;
-        equipmentList.appendChild(listItem);
-    });
-}
-
-// Fix: Implement `renderDiagram` to draw the building and equipment on the SVG canvas.
-function renderDiagram() {
-    if (!diagramCanvas) return;
-
-    // Clear previous render
-    while (diagramCanvas.firstChild) {
-        diagramCanvas.removeChild(diagramCanvas.firstChild);
-    }
-    
-    const transformGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    transformGroup.setAttribute('transform', `translate(${diagramState.transform.translateX}, ${diagramState.transform.translateY}) scale(${diagramState.transform.scale})`);
-    diagramCanvas.appendChild(transformGroup);
-    
-    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-    transformGroup.appendChild(defs);
-
-    const building = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    building.setAttribute('x', '0');
-    building.setAttribute('y', '0');
-    building.setAttribute('width', (diagramState.building.length * diagramState.pixelsPerFoot).toString());
-    building.setAttribute('height', (diagramState.building.width * diagramState.pixelsPerFoot).toString());
-    building.setAttribute('class', 'diagram-building');
-    transformGroup.appendChild(building);
-    
-    diagramState.equipment.forEach(eq => {
-        const equipmentGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
-        equipmentGroup.setAttribute('class', 'equipment-group');
-        const eqInfo = EQUIPMENT_ZONES[eq.type];
-        if (!eqInfo) return;
-
-        [...eqInfo.zones].reverse().forEach(zone => {
-            const zoneCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-            zoneCircle.setAttribute('cx', (eq.x * diagramState.pixelsPerFoot).toString());
-            zoneCircle.setAttribute('cy', (eq.y * diagramState.pixelsPerFoot).toString());
-            zoneCircle.setAttribute('r', (zone.radius * diagramState.pixelsPerFoot).toString());
-            zoneCircle.setAttribute('class', `zone-${zone.type.replace(' ', '-').toLowerCase()}`);
-            equipmentGroup.appendChild(zoneCircle);
-        });
-
-        const equipmentIcon = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        equipmentIcon.setAttribute('cx', (eq.x * diagramState.pixelsPerFoot).toString());
-        equipmentIcon.setAttribute('cy', (eq.y * diagramState.pixelsPerFoot).toString());
-        // Icon radius should be constant on screen, so we inverse scale it
-        equipmentIcon.setAttribute('r', (5 / diagramState.transform.scale).toString());
-        equipmentIcon.setAttribute('class', 'equipment-icon');
-        
-        equipmentIcon.addEventListener('mousedown', (e) => {
-            e.stopPropagation(); 
-            isDraggingEquipment = true;
-            isPanning = false; 
-            const mousePos = getDiagramWorldCoordinates(e);
-            draggedEquipmentInfo = {
-                id: eq.id,
-                startX: eq.x,
-                startY: eq.y,
-                mouseStartX: mousePos.x / diagramState.pixelsPerFoot,
-                mouseStartY: mousePos.y / diagramState.pixelsPerFoot,
-            };
-            diagramCanvas.classList.add('dragging-equipment');
-        });
-        
-        equipmentGroup.appendChild(equipmentIcon);
-        transformGroup.appendChild(equipmentGroup);
-    });
-    
-    updateEquipmentList();
-}
 
 function initDiagramGenerator() {
     // Populate Palette
@@ -2113,7 +1964,6 @@ function getDiagramWorldCoordinates(event: { clientX: number, clientY: number })
 }
 
 
-// Fix: Correct typo `diagram` to `diagramCanvas` and complete the truncated function.
 function setupDiagramCanvas(buildingWidthFt: number, buildingLengthFt: number, clearEquipment = true) {
     if (!diagramCanvas) return;
     diagramState.building.width = buildingWidthFt;
@@ -2125,45 +1975,293 @@ function setupDiagramCanvas(buildingWidthFt: number, buildingLengthFt: number, c
 
     const padding = 50; // pixels
     const canvasRect = diagramCanvas.getBoundingClientRect();
+    if(canvasRect.width === 0 || canvasRect.height === 0) return;
 
-    if (buildingLengthFt <= 0 || buildingWidthFt <= 0) {
-        diagramState.pixelsPerFoot = 1;
-        diagramState.transform = { scale: 1, translateX: 0, translateY: 0 };
-        renderDiagram();
-        return;
-    }
+    const availableWidth = canvasRect.width - padding * 2;
+    const availableHeight = canvasRect.height - padding * 2;
 
-    // Calculate the pixels per foot ratio to fit the building in the canvas.
-    const scaleX = (canvasRect.width - 2 * padding) / buildingLengthFt;
-    const scaleY = (canvasRect.height - 2 * padding) / buildingWidthFt;
-    const pixelsPerFoot = Math.min(scaleX, scaleY);
-    diagramState.pixelsPerFoot = pixelsPerFoot > 0 ? pixelsPerFoot : 1;
+    const scaleX = availableWidth > 0 ? availableWidth / buildingLengthFt : 1;
+    const scaleY = availableHeight > 0 ? availableHeight / buildingWidthFt : 1;
+
+    diagramState.pixelsPerFoot = Math.min(scaleX, scaleY);
     
-    // Reset transform and center the view
-    diagramState.transform.scale = 1;
-    const buildingPixelWidth = diagramState.building.length * diagramState.pixelsPerFoot;
-    const buildingPixelHeight = diagramState.building.width * diagramState.pixelsPerFoot;
-    diagramState.transform.translateX = (canvasRect.width - buildingPixelWidth) / 2;
-    diagramState.transform.translateY = (canvasRect.height - buildingPixelHeight) / 2;
+    // Center the building in the view
+    const buildingWidthPx = buildingWidthFt * diagramState.pixelsPerFoot;
+    const buildingLengthPx = buildingLengthFt * diagramState.pixelsPerFoot;
+    const initialTranslateX = (canvasRect.width - buildingLengthPx) / 2;
+    const initialTranslateY = (canvasRect.height - buildingWidthPx) / 2;
+
+    diagramState.transform = {
+        scale: 1,
+        translateX: initialTranslateX,
+        translateY: initialTranslateY
+    };
 
     renderDiagram();
 }
 
-function initLegend() {
-    if(!diagramLegend) return;
-    diagramLegend.innerHTML = `
-        <div class="legend-item"><span class="legend-color-box zone-division-1"></span> Class I, Division 1</div>
-        <div class="legend-item"><span class="legend-color-box zone-division-2"></span> Class I, Division 2</div>
-    `;
+function renderDiagram() {
+    if (!diagramCanvas) return;
+    diagramCanvas.innerHTML = ''; 
+    equipmentList.innerHTML = '';
+
+    const { pixelsPerFoot, transform } = diagramState;
+    const buildingLengthPx = diagramState.building.length * pixelsPerFoot;
+    const buildingWidthPx = diagramState.building.width * pixelsPerFoot;
+
+    // Master group for pan and zoom
+    const masterGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    masterGroup.setAttribute('transform', `translate(${transform.translateX} ${transform.translateY}) scale(${transform.scale})`);
+    
+    // Building Outline
+    const buildingRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    buildingRect.setAttribute('x', '0');
+    buildingRect.setAttribute('y', '0');
+    buildingRect.setAttribute('width', buildingLengthPx.toString());
+    buildingRect.setAttribute('height', buildingWidthPx.toString());
+    buildingRect.setAttribute('class', 'building-outline');
+    masterGroup.appendChild(buildingRect);
+
+    // Dimension Labels
+    const addDimension = (x1: number, y1: number, x2: number, y2: number, label: string, offset: number) => {
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('class', 'dimension');
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', x1.toString());
+        line.setAttribute('y1', y1.toString());
+        line.setAttribute('x2', x2.toString());
+        line.setAttribute('y2', y2.toString());
+        line.setAttribute('class', 'dimension-line');
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', ((x1 + x2) / 2).toString());
+        text.setAttribute('y', ((y1 + y2) / 2 + offset).toString());
+        text.setAttribute('class', 'dimension-text');
+        text.textContent = label;
+        g.appendChild(line);
+        g.appendChild(text);
+        return g;
+    };
+    masterGroup.appendChild(addDimension(0, -20, buildingLengthPx, -20, `${diagramState.building.length.toFixed(2)} ft`, -5));
+    masterGroup.appendChild(addDimension(-20, 0, -20, buildingWidthPx, `${diagramState.building.width.toFixed(2)} ft`, 4));
+
+    // Equipment and Zones
+    diagramState.equipment.forEach(item => {
+        const eqData = EQUIPMENT_ZONES[item.type];
+        if (!eqData) return;
+
+        const cx = item.x * pixelsPerFoot;
+        const cy = item.y * pixelsPerFoot;
+
+        // Render zones (largest radius first)
+        [...eqData.zones].sort((a,b) => b.radius - a.radius).forEach(zone => {
+            const radiusPx = zone.radius * pixelsPerFoot;
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', cx.toString());
+            circle.setAttribute('cy', cy.toString());
+            circle.setAttribute('r', radiusPx.toString());
+            circle.setAttribute('class', zone.type === 'Division 1' ? 'zone-div1' : 'zone-div2');
+            masterGroup.appendChild(circle);
+
+            // Add Dimension Line and Text
+            const dimensionGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            const dimLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            dimLine.setAttribute('x1', cx.toString());
+            dimLine.setAttribute('y1', cy.toString());
+            dimLine.setAttribute('x2', (cx + radiusPx).toString());
+            dimLine.setAttribute('y2', cy.toString());
+            dimLine.setAttribute('class', 'dimension-radius-line');
+
+            const dimText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            dimText.setAttribute('x', (cx + radiusPx / 2).toString());
+            dimText.setAttribute('y', (cy - 5 / transform.scale).toString());
+            dimText.setAttribute('class', 'dimension-radius-text');
+            dimText.textContent = `R: ${zone.radius} ft`;
+
+            dimensionGroup.appendChild(dimLine);
+            dimensionGroup.appendChild(dimText);
+            masterGroup.appendChild(dimensionGroup);
+
+
+            // Zone Label
+            const labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            labelText.setAttribute('x', cx.toString());
+            labelText.setAttribute('y', (cy - radiusPx + (12 / transform.scale)).toString());
+            labelText.setAttribute('class', 'zone-label');
+            labelText.textContent = zone.type === 'Division 1' ? 'Div 1' : 'Div 2';
+            masterGroup.appendChild(labelText);
+        });
+
+        // Equipment Icon (Draggable)
+        const icon = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        icon.setAttribute('cx', cx.toString());
+        icon.setAttribute('cy', cy.toString());
+        icon.setAttribute('r', (Math.min(5 / transform.scale, 2 * pixelsPerFoot)).toString()); // Make icon size more consistent when zoomed
+        icon.setAttribute('class', 'equipment-icon draggable-equipment');
+        
+        icon.addEventListener('mousedown', (e) => {
+            e.stopPropagation(); // Prevent canvas panning
+            
+            isDraggingEquipment = true;
+            const mousePos = getDiagramWorldCoordinates(e);
+            draggedEquipmentInfo = {
+                id: item.id,
+                startX: item.x, // in feet
+                startY: item.y, // in feet
+                mouseStartX: mousePos.x / pixelsPerFoot,
+                mouseStartY: mousePos.y / pixelsPerFoot,
+            };
+            diagramCanvas.classList.add('dragging-equipment');
+        });
+
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = eqData.label;
+        icon.appendChild(title);
+        masterGroup.appendChild(icon);
+        
+        // Add to equipment list
+        const listItem = document.createElement('li');
+        listItem.innerHTML = `
+            <span>${eqData.label}</span>
+            <button class="remove-equipment-btn" data-id="${item.id}" title="Remove Item">×</button>
+        `;
+        equipmentList.appendChild(listItem);
+    });
+    
+    diagramCanvas.appendChild(masterGroup);
+
+    // Scale Bar and Legend (drawn directly on SVG, not affected by pan/zoom)
+    const scaleBarLengthFt = 5;
+    const scaleBarLengthPx = scaleBarLengthFt * pixelsPerFoot * transform.scale;
+    const scaleGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    scaleGroup.setAttribute('class', 'scale-bar-group');
+    const scaleLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    scaleLine.setAttribute('x1', '20');
+    scaleLine.setAttribute('y1', (diagramCanvas.clientHeight - 20).toString());
+    scaleLine.setAttribute('x2', (20 + scaleBarLengthPx).toString());
+    scaleLine.setAttribute('y2', (diagramCanvas.clientHeight - 20).toString());
+    scaleLine.setAttribute('class', 'scale-bar');
+    const scaleText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    scaleText.setAttribute('x', (20 + scaleBarLengthPx / 2).toString());
+    scaleText.setAttribute('y', (diagramCanvas.clientHeight - 25).toString());
+    scaleText.setAttribute('class', 'scale-text');
+    scaleText.textContent = `${scaleBarLengthFt} ft`;
+    scaleGroup.appendChild(scaleLine);
+    scaleGroup.appendChild(scaleText);
+    diagramCanvas.appendChild(scaleGroup);
+
+    // Render Legend
+    diagramLegend.innerHTML = '';
+    const legendData = [
+        { class: 'zone-div1', label: 'Class I, Division 1' },
+        { class: 'zone-div2', label: 'Class I, Division 2' },
+    ];
+    legendData.forEach(item => {
+        const legendItem = document.createElement('div');
+        legendItem.className = 'legend-item';
+        const swatch = document.createElement('div');
+        swatch.className = `legend-swatch ${item.class}`;
+        const label = document.createElement('span');
+        label.className = 'legend-label';
+        label.textContent = item.label;
+        legendItem.appendChild(swatch);
+        legendItem.appendChild(label);
+        diagramLegend.appendChild(legendItem);
+    });
 }
 
 
-// --- App Initialization ---
-document.addEventListener('DOMContentLoaded', () => {
-    // Set default date
-    if (dateInput) {
-        dateInput.value = new Date().toISOString().split('T')[0];
+// --- Fugitive Emission Builder Logic ---
+function populateFugitiveSourceTypes() {
+    const selectedSetKey = fugitiveFactorSetSelect.value;
+    const factors = FUGITIVE_EMISSION_FACTOR_SETS[selectedSetKey].factors;
+
+    fugitiveSourceTypeSelect.innerHTML = ''; // Clear existing options
+    Object.keys(factors).forEach(key => {
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = factors[key].label;
+        fugitiveSourceTypeSelect.appendChild(option);
+    });
+}
+
+function initFugitiveEmissionBuilder() {
+    // Populate factor set dropdown
+    Object.keys(FUGITIVE_EMISSION_FACTOR_SETS).forEach(key => {
+        const option = document.createElement('option');
+        option.value = key;
+        option.textContent = FUGITIVE_EMISSION_FACTOR_SETS[key].name;
+        fugitiveFactorSetSelect.appendChild(option);
+    });
+    
+    // Add event listener to factor set dropdown
+    fugitiveFactorSetSelect.addEventListener('change', () => {
+        // Clear existing sources when set is changed to avoid mismatches
+        fugitiveSources = [];
+        populateFugitiveSourceTypes();
+        renderFugitiveSourcesList();
+    });
+
+    // Initial population of component types based on default selection
+    populateFugitiveSourceTypes();
+    // Initial render of the (empty) list
+    renderFugitiveSourcesList();
+}
+
+function renderFugitiveSourcesList() {
+    const selectedSetKey = fugitiveFactorSetSelect.value;
+    const factors = FUGITIVE_EMISSION_FACTOR_SETS[selectedSetKey].factors;
+    
+    fugitiveSourcesList.innerHTML = '';
+    if (fugitiveSources.length === 0) {
+        fugitiveSourcesList.innerHTML = `<p class="info-note" style="text-align: left;">No fugitive emission sources added yet.</p>`;
+    } else {
+        fugitiveSources.forEach((source, index) => {
+            const item = document.createElement('div');
+            item.className = 'fugitive-source-item';
+            
+            const label = factors[source.type].label;
+            const totalRate = (factors[source.type].rateCFM * source.quantity).toFixed(2);
+
+            item.innerHTML = `
+                <span><strong>${source.quantity}x</strong> ${label}</span>
+                <span>${totalRate} CFM</span>
+                <button class="remove-source-btn" data-index="${index}">×</button>
+            `;
+            fugitiveSourcesList.appendChild(item);
+        });
     }
-    initDiagramGenerator();
-    initLegend();
-});
+    
+    // Add event listeners to remove buttons
+    document.querySelectorAll('.remove-source-btn').forEach(button => {
+        button.addEventListener('click', (e) => {
+            const indexToRemove = parseInt((e.target as HTMLElement).dataset.index || '-1', 10);
+            if (indexToRemove > -1) {
+                fugitiveSources.splice(indexToRemove, 1);
+                renderFugitiveSourcesList();
+            }
+        });
+    });
+
+    updateTotalLeakRate();
+}
+
+function updateTotalLeakRate() {
+    const selectedSetKey = fugitiveFactorSetSelect.value;
+    const factors = FUGITIVE_EMISSION_FACTOR_SETS[selectedSetKey].factors;
+
+    const total = fugitiveSources.reduce((acc, src) => {
+        // Ensure the source type exists in the current factor set before calculating
+        if (factors[src.type]) {
+            return acc + (factors[src.type].rateCFM * src.quantity);
+        }
+        return acc;
+    }, 0);
+    totalLeakRateValue.textContent = `${total.toFixed(2)} CFM`;
+}
+
+
+// --- Initialization ---
+initDiagramGenerator();
+initFugitiveEmissionBuilder();
+// Set today's date in the date input field
+dateInput.value = new Date().toISOString().substring(0, 10);

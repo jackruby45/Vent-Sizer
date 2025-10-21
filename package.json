@@ -1,5 +1,5 @@
 {
-  "name": "electrical-area-classification-10-16--2025-k",
+  "name": "electrical-area-classification-final-1",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,8 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "jspdf": "^2.5.1",
-    "jspdf-autotable": "^3.8.2"
+
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
